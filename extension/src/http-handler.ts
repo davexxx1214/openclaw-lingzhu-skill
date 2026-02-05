@@ -107,7 +107,7 @@ export function createHttpHandler(api: any, getConfig: () => LingzhuConfig) {
       );
 
       // 生成 session key
-      const sessionKey = `lingzhu:${body.message_id}`;
+      const sessionKey = `lingzhu:${body.agent_id}`;
 
       // 获取 gateway 端口和 token
       const gatewayPort = api.config?.gateway?.port ?? 18789;
