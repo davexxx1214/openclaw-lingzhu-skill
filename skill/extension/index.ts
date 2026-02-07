@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { lingzhuConfigSchema, resolveLingzhuConfig, generateAuthAk } from "./src/config.js";
 import { createHttpHandler } from "./src/http-handler.js";
 import { registerLingzhuCli } from "./src/cli.js";
+import { createLingzhuTools } from "./src/lingzhu-tools.js";
 import type { LingzhuConfig } from "./src/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -73,7 +74,24 @@ const lingzhuPlugin = {
       logger.info("[Lingzhu] 已注册 HTTP 端点: POST /metis/agent/api/sse");
     }
 
-    // 2. 注册 CLI 命令
+    // 2. 注册灵珠设备工具
+    logger.info(`[Lingzhu] 检查 registerTool API: ${typeof api.registerTool}`);
+    if (typeof api.registerTool === "function") {
+      const tools = createLingzhuTools();
+      logger.info(`[Lingzhu] 准备注册 ${tools.length} 个工具`);
+      for (const tool of tools) {
+        try {
+          api.registerTool(tool, { optional: false });
+          logger.info(`[Lingzhu] 已注册工具: ${tool.name}`);
+        } catch (e) {
+          logger.error(`[Lingzhu] 注册工具失败: ${tool.name}, 错误: ${e}`);
+        }
+      }
+    } else {
+      logger.warn("[Lingzhu] registerTool API 不可用，无法注册设备工具");
+    }
+
+    // 3. 注册 CLI 命令
     if (typeof api.registerCli === "function") {
       api.registerCli(
         (ctx: any) => registerLingzhuCli(ctx, getState),
@@ -81,7 +99,7 @@ const lingzhuPlugin = {
       );
     }
 
-    // 3. 注册后台服务
+    // 4. 注册后台服务
     if (typeof api.registerService === "function") {
       api.registerService({
         id: "lingzhu-bridge",

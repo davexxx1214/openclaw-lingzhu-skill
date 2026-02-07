@@ -87,8 +87,8 @@ openclaw lingzhu status
 ### 本地测试
 
 ```bash
-curl --location 'http://127.0.0.1:18789/metis/agent/api/sse' \
---header 'Authorization: Bearer {your AK}' \
+curl -X POST 'http://127.0.0.1:18789/metis/agent/api/sse' \
+--header 'Authorization: Bearer {your key}' \
 --header 'Content-Type: application/json' \
 --data '{
   "message_id": "test_local_01",
@@ -103,7 +103,7 @@ curl --location 'http://127.0.0.1:18789/metis/agent/api/sse' \
 
 ```bash
 curl --location 'https://<您的域名>/metis/agent/api/sse' \
---header 'Authorization: Bearer <your AK>' \
+--header 'Authorization: Bearer <您的AK>' \
 --header 'Content-Type: application/json' \
 --data '{
   "message_id": "test_ngrok_01",

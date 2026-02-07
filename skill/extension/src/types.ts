@@ -5,6 +5,8 @@ export interface LingzhuConfig {
   enabled?: boolean;
   authAk?: string;
   agentId?: string;
+  /** 是否将设备信息（metadata）传递给 OpenClaw，默认 true */
+  includeMetadata?: boolean;
 }
 
 /**
@@ -26,6 +28,10 @@ export interface LingzhuContext {
   longitude?: string;
   weather?: string;
   battery?: string;
+  currentTime?: string;
+  lang?: string;
+  company_id?: number;
+  runningApp?: string;
 }
 
 /**
@@ -36,22 +42,25 @@ export interface LingzhuRequest {
   agent_id: string;
   message: LingzhuMessage[];
   user_id?: string;
-  metadata?: {
-    context?: LingzhuContext;
-  };
+  /** metadata 直接包含设备上下文信息（非嵌套在 context 下） */
+  metadata?: LingzhuContext;
 }
 
 /**
  * 灵珠工具调用
  */
 export interface LingzhuToolCall {
+  handling_required: boolean;
   command: "take_photo" | "take_navigation" | "notify_agent_off" | "control_calendar";
-  action?: string;
-  poi_name?: string;
-  navi_type?: string;
-  title?: string;
-  start_time?: string;
-  end_time?: string;
+  params: {
+    is_recall?: boolean;
+    action?: string;
+    poi_name?: string;
+    navi_type?: string;
+    title?: string;
+    start_time?: string;
+    end_time?: string;
+  };
 }
 
 /**
