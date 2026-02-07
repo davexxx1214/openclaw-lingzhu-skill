@@ -3,29 +3,37 @@
  * 这些工具会被注册到 OpenClaw Agent，当 AI 调用时会转换为灵珠设备命令
  */
 
-import { Type, type Static } from "@sinclair/typebox";
-
 // 拍照工具参数
-const TakePhotoParams = Type.Object({});
+const TakePhotoParams = {
+    type: "object",
+    properties: {},
+    required: []
+};
 
 // 导航工具参数
-const NavigateParams = Type.Object({
-    destination: Type.String({ description: "目标地址或 POI 名称" }),
-    navi_type: Type.Optional(
-        Type.Union([
-            Type.Literal("0"),
-            Type.Literal("1"),
-            Type.Literal("2"),
-        ], { description: "导航类型：0=驾车，1=步行，2=骑行" })
-    ),
-});
+const NavigateParams = {
+    type: "object",
+    properties: {
+        destination: { type: "string", description: "目标地址或 POI 名称" },
+        navi_type: {
+            type: "string",
+            enum: ["0", "1", "2"],
+            description: "导航类型：0=驾车，1=步行，2=骑行"
+        },
+    },
+    required: ["destination"],
+};
 
 // 日程工具参数
-const CalendarParams = Type.Object({
-    title: Type.String({ description: "日程标题" }),
-    start_time: Type.String({ description: "开始时间，格式：YYYY-MM-DD HH:mm" }),
-    end_time: Type.Optional(Type.String({ description: "结束时间，格式：YYYY-MM-DD HH:mm" })),
-});
+const CalendarParams = {
+    type: "object",
+    properties: {
+        title: { type: "string", description: "日程标题" },
+        start_time: { type: "string", description: "开始时间，格式：YYYY-MM-DD HH:mm" },
+        end_time: { type: "string", description: "结束时间，格式：YYYY-MM-DD HH:mm" },
+    },
+    required: ["title", "start_time"],
+};
 
 /**
  * 创建灵珠设备工具
@@ -37,7 +45,7 @@ export function createLingzhuTools() {
             name: "take_photo",
             description: "使用灵珠设备的摄像头拍照。当用户要求拍照、拍摄、照相时，调用此工具。",
             parameters: TakePhotoParams,
-            async execute(_id: string, _params: Static<typeof TakePhotoParams>) {
+            async execute(_id: string, _params: any) {
                 // 返回特殊标记，让 http-handler 识别并生成 tool_call
                 return {
                     content: [
@@ -53,7 +61,7 @@ export function createLingzhuTools() {
             name: "navigate",
             description: "使用灵珠设备的导航功能，导航到指定地址或POI。",
             parameters: NavigateParams,
-            async execute(_id: string, params: Static<typeof NavigateParams>) {
+            async execute(_id: string, params: any) {
                 return {
                     content: [
                         {
@@ -68,7 +76,7 @@ export function createLingzhuTools() {
             name: "calendar",
             description: "在灵珠设备上创建日程提醒。",
             parameters: CalendarParams,
-            async execute(_id: string, params: Static<typeof CalendarParams>) {
+            async execute(_id: string, params: any) {
                 return {
                     content: [
                         {
@@ -82,7 +90,7 @@ export function createLingzhuTools() {
         {
             name: "exit_agent",
             description: "退出当前智能体会话，返回灵珠主界面。",
-            parameters: Type.Object({}),
+            parameters: { type: "object", properties: {} },
             async execute() {
                 return {
                     content: [
