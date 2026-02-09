@@ -50,6 +50,123 @@ async function readJsonBody(req: IncomingMessage): Promise<any> {
 }
 
 /**
+ * 下载图片到本地临时目录，返回 file:// URL
+ */
+async function downloadImageToFile(imageUrl: string): Promise<string | null> {
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const crypto = await import("node:crypto");
+  const { fileURLToPath } = await import("node:url");
+
+  try {
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      return null;
+    }
+
+    const contentType = response.headers.get("content-type") || "image/webp";
+    const ext = contentType.includes("png") ? ".png"
+      : contentType.includes("jpeg") || contentType.includes("jpg") ? ".jpg"
+        : contentType.includes("gif") ? ".gif"
+          : ".webp";
+
+    // 获取当前模块所在目录，创建 .cache/img 目录
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const cacheDir = path.resolve(__dirname, "../../.cache/img");
+    await fs.mkdir(cacheDir, { recursive: true });
+
+    // 生成唯一文件名
+    const hash = crypto.createHash("md5").update(imageUrl).digest("hex").slice(0, 12);
+    const fileName = `img_${Date.now()}_${hash}${ext}`;
+    const filePath = path.join(cacheDir, fileName);
+
+    // 保存图片到文件
+    const arrayBuffer = await response.arrayBuffer();
+    await fs.writeFile(filePath, Buffer.from(arrayBuffer));
+
+    return `file://${filePath}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 预处理 OpenAI 消息：下载图片到本地并将路径嵌入到文本消息中
+ * 注意：OpenClaw 的 /v1/chat/completions API 只提取文本内容，忽略 image_url
+ * 因此我们将图片路径直接嵌入到文本中
+ */
+async function preprocessOpenAIMessages(
+  messages: Array<{ role: string; content: string | Array<{ type: string; image_url?: { url: string }; text?: string }> }>,
+  logger: { info: (msg: string) => void; warn: (msg: string) => void }
+): Promise<Array<{ role: string; content: string }>> {
+  const result: Array<{ role: string; content: string }> = [];
+
+  for (const msg of messages) {
+    if (typeof msg.content === "string") {
+      result.push({ role: msg.role, content: msg.content });
+      continue;
+    }
+
+    if (!Array.isArray(msg.content)) {
+      result.push({ role: msg.role, content: String(msg.content) });
+      continue;
+    }
+
+    // 处理多模态消息：收集文本和图片路径
+    const textParts: string[] = [];
+    const imagePaths: string[] = [];
+
+    for (const part of msg.content) {
+      if (part.type === "text" && part.text) {
+        textParts.push(part.text);
+      } else if (part.type === "image_url" && part.image_url?.url) {
+        const url = part.image_url.url;
+
+        // 如果已经是本地文件路径，直接使用
+        if (url.startsWith("file://")) {
+          imagePaths.push(url.replace("file://", ""));
+        } else if (url.startsWith("data:")) {
+          // data URL 暂不处理，跳过
+          logger.warn(`[Lingzhu] data URL 暂不支持，跳过`);
+        } else {
+          // 下载图片到本地文件
+          logger.info(`[Lingzhu] 正在下载图片到本地: ${url.substring(0, 80)}...`);
+          const fileUrl = await downloadImageToFile(url);
+          if (fileUrl) {
+            imagePaths.push(fileUrl.replace("file://", ""));
+            logger.info(`[Lingzhu] 图片已保存到: ${fileUrl}`);
+          } else {
+            logger.warn(`[Lingzhu] 图片下载失败: ${url}`);
+          }
+        }
+      }
+    }
+
+    // 构建最终的文本消息
+    let finalContent = textParts.join("\n");
+
+    // 如果有图片，将图片路径嵌入到消息中
+    if (imagePaths.length > 0) {
+      const imageRefs = imagePaths.map(p => `[图片: ${p}]`).join("\n");
+      if (finalContent) {
+        finalContent = `${finalContent}\n\n${imageRefs}`;
+      } else {
+        // 如果只有图片没有文字，添加占位文本
+        finalContent = `请分析这张图片\n\n${imageRefs}`;
+        logger.info("[Lingzhu] 为纯图片消息添加了占位文本");
+      }
+    }
+
+    if (finalContent) {
+      result.push({ role: msg.role, content: finalContent });
+    }
+  }
+
+  return result;
+}
+
+
+/**
  * 创建 HTTP 处理器
  */
 export function createHttpHandler(api: any, getConfig: () => LingzhuConfig) {
@@ -106,10 +223,13 @@ export function createHttpHandler(api: any, getConfig: () => LingzhuConfig) {
 
       // 转换消息格式（根据配置决定是否包含设备信息）
       const includeMetadata = config.includeMetadata !== false; // 默认 true
-      const openaiMessages = lingzhuToOpenAI(
+      let openaiMessages = lingzhuToOpenAI(
         body.message,
         includeMetadata ? body.metadata : undefined
       );
+
+      // 预处理消息：下载图片并为纯图片消息添加占位文本
+      openaiMessages = await preprocessOpenAIMessages(openaiMessages as any, logger);
       logger.info(`[Lingzhu] includeMetadata=${includeMetadata}, openaiMessages=${JSON.stringify(openaiMessages)}`);
 
 

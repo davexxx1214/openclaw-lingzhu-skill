@@ -1,6 +1,6 @@
 ---
 name: lingzhu
-description: 灵珠平台接入 - 将 openclaw 接入灵珠智能体平台，并且可以使用lingzhu的设备命令
+description: 通过灵珠平台，将 CpenClaw 接入 Rokid Glasses,支持控制拍照传图、导航、日程工具,支持与智能体同步眼镜设备信息,灵珠平台地址 https://agent-develop.rokid.com
 metadata: {"openclaw":{"emoji":"🔗","requires":{"plugins":["lingzhu"],"config":["gateway.http.endpoints.chatCompletions.enabled"]},"install":[{"kind":"node","package":"@r.wmi/openclaw-lingzhu"}]}}
 ---
 
