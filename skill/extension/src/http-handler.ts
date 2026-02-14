@@ -152,7 +152,7 @@ async function preprocessOpenAIMessages(
         finalContent = `${finalContent}\n\n${imageRefs}`;
       } else {
         // 如果只有图片没有文字，添加占位文本
-        finalContent = `请分析这张图片\n\n${imageRefs}`;
+        finalContent = `image is here\n\n${imageRefs}`;
         logger.info("[Lingzhu] 为纯图片消息添加了占位文本");
       }
     }
@@ -293,7 +293,6 @@ export function createHttpHandler(api: any, getConfig: () => LingzhuConfig) {
 
       // 调用 OpenClaw /v1/chat/completions API
       const openclawUrl = `http://127.0.0.1:${gatewayPort}/v1/chat/completions`;
-      console.log("openclawUrl", openaiMessages);
       const openclawBody = {
         model: `openclaw:${config.agentId || "main"}`,
         stream: true,
@@ -338,81 +337,97 @@ export function createHttpHandler(api: any, getConfig: () => LingzhuConfig) {
       let buffer = "";
       let streamFinished = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      // 保活机制：每 7 秒发送 SSE 注释，防止灵珠超时断开
+      const keepaliveInterval = setInterval(() => {
+        try {
+          res.write(": keepalive\n\n");
+          console.log("[Lingzhu] keepalive")
+          // res.write("处理中...\n\n");
+        } catch {
+          // 连接已关闭，忽略
+          clearInterval(keepaliveInterval);
+        }
+      }, 7000);
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data: ")) continue;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
 
-          const data = trimmed.slice(6);
-          if (data === "[DONE]") {
-            streamFinished = true;
-            continue;
-          }
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data: ")) continue;
 
-          try {
-            const chunk = JSON.parse(data);
-            const delta = chunk.choices?.[0]?.delta;
-            const finishReason = chunk.choices?.[0]?.finish_reason;
-
-            // 调试：打印每个 SSE chunk 的关键信息
-            logger.info(`[Lingzhu] SSE chunk: delta.content=${delta?.content?.substring(0, 50) || 'null'}, delta.tool_calls=${JSON.stringify(delta?.tool_calls) || 'null'}, finishReason=${finishReason || 'null'}`);
-
-            // 累积工具调用片段（不立即发送，等完整后再发送）
-            if (delta?.tool_calls) {
-              logger.info(`[Lingzhu] 检测到 tool_calls 片段: ${JSON.stringify(delta.tool_calls)}`);
-              toolAccumulator.accumulate(delta.tool_calls);
+            const data = trimmed.slice(6);
+            if (data === "[DONE]") {
+              streamFinished = true;
+              continue;
             }
 
-            // 文本内容直接流式输出
-            if (delta?.content) {
-              fullResponse += delta.content;
-              const lingzhuData = openaiChunkToLingzhu(
-                chunk,
-                body.message_id,
-                body.agent_id
-              );
-              res.write(formatLingzhuSSE("message", lingzhuData));
-            }
+            try {
+              const chunk = JSON.parse(data);
+              const delta = chunk.choices?.[0]?.delta;
+              const finishReason = chunk.choices?.[0]?.finish_reason;
 
-            // 当流结束且有工具调用时，发送完整的工具调用
-            if (finishReason) {
-              logger.info(`[Lingzhu] 流结束, finishReason=${finishReason}, hasTools=${toolAccumulator.hasTools()}`);
-            }
+              // 调试：打印每个 SSE chunk 的关键信息
+              logger.info(`[Lingzhu] SSE chunk: delta.content=${delta?.content?.substring(0, 50) || 'null'}, delta.tool_calls=${JSON.stringify(delta?.tool_calls) || 'null'}, finishReason=${finishReason || 'null'}`);
 
-            if (finishReason === "tool_calls" || (finishReason && toolAccumulator.hasTools())) {
-              const completedTools = toolAccumulator.getCompleted();
-              logger.info(`[Lingzhu] 累积的工具调用: ${JSON.stringify(completedTools)}`);
+              // 累积工具调用片段（不立即发送，等完整后再发送）
+              if (delta?.tool_calls) {
+                logger.info(`[Lingzhu] 检测到 tool_calls 片段: ${JSON.stringify(delta.tool_calls)}`);
+                toolAccumulator.accumulate(delta.tool_calls);
+              }
 
-              for (const tool of completedTools) {
-                const lingzhuToolCall = parseToolCallFromAccumulated(tool.name, tool.arguments);
-                logger.info(`[Lingzhu] 解析工具 ${tool.name} -> ${lingzhuToolCall ? JSON.stringify(lingzhuToolCall) : 'null (未映射)'}`);
+              // 文本内容直接流式输出
+              if (delta?.content) {
+                fullResponse += delta.content;
+                const lingzhuData = openaiChunkToLingzhu(
+                  chunk,
+                  body.message_id,
+                  body.agent_id
+                );
+                res.write(formatLingzhuSSE("message", lingzhuData));
+              }
 
-                if (lingzhuToolCall) {
-                  const toolData = {
-                    role: "agent" as const,
-                    type: "tool_call" as const,
-                    message_id: body.message_id,
-                    agent_id: body.agent_id,
-                    is_finish: true,
-                    tool_call: lingzhuToolCall,
-                  };
-                  const sseOutput = formatLingzhuSSE("message", toolData);
-                  logger.info(`[Lingzhu] 发送给灵珠的 SSE: ${sseOutput.replace(/\n/g, '\\n')}`);
-                  res.write(sseOutput);
+              // 当流结束且有工具调用时，发送完整的工具调用
+              if (finishReason) {
+                logger.info(`[Lingzhu] 流结束, finishReason=${finishReason}, hasTools=${toolAccumulator.hasTools()}`);
+              }
+
+              if (finishReason === "tool_calls" || (finishReason && toolAccumulator.hasTools())) {
+                const completedTools = toolAccumulator.getCompleted();
+                logger.info(`[Lingzhu] 累积的工具调用: ${JSON.stringify(completedTools)}`);
+
+                for (const tool of completedTools) {
+                  const lingzhuToolCall = parseToolCallFromAccumulated(tool.name, tool.arguments);
+                  logger.info(`[Lingzhu] 解析工具 ${tool.name} -> ${lingzhuToolCall ? JSON.stringify(lingzhuToolCall) : 'null (未映射)'}`);
+
+                  if (lingzhuToolCall) {
+                    const toolData = {
+                      role: "agent" as const,
+                      type: "tool_call" as const,
+                      message_id: body.message_id,
+                      agent_id: body.agent_id,
+                      is_finish: true,
+                      tool_call: lingzhuToolCall,
+                    };
+                    const sseOutput = formatLingzhuSSE("message", toolData);
+                    logger.info(`[Lingzhu] 发送给灵珠的 SSE: ${sseOutput.replace(/\n/g, '\\n')}`);
+                    res.write(sseOutput);
+                  }
                 }
               }
+            } catch {
+              // 忽略解析错误
             }
-          } catch {
-            // 忽略解析错误
           }
         }
+      } finally {
+        clearInterval(keepaliveInterval);
       }
 
       const hasToolCall = toolAccumulator.hasTools();
@@ -448,7 +463,7 @@ export function createHttpHandler(api: any, getConfig: () => LingzhuConfig) {
       }
 
       // 发送结束事件
-      res.write(formatLingzhuSSE("done", "[DONE]"));
+      // res.write(formatLingzhuSSE("done", "[DONE]"));
       res.end();
 
       logger.info(`[Lingzhu] Completed: message_id=${body.message_id}`);
@@ -466,7 +481,7 @@ export function createHttpHandler(api: any, getConfig: () => LingzhuConfig) {
         is_finish: true,
       };
       res.write(formatLingzhuSSE("message", errorData));
-      res.write(formatLingzhuSSE("done", "[DONE]"));
+      // res.write(formatLingzhuSSE("done", "[DONE]"));
       res.end();
     }
 
