@@ -90,16 +90,28 @@ async function downloadImageToFile(imageUrl: string): Promise<string | null> {
   }
 }
 
+type OpenAIContentPart = {
+  type: string;
+  image_url?: { url: string };
+  text?: string;
+};
+
+type OpenAIMessageLike = {
+  role: string;
+  content: string | OpenAIContentPart[];
+};
+
 /**
- * 预处理 OpenAI 消息：下载图片到本地并将路径嵌入到文本消息中
- * 注意：OpenClaw 的 /v1/chat/completions API 只提取文本内容，忽略 image_url
- * 因此我们将图片路径直接嵌入到文本中
+ * 预处理 OpenAI 消息
+ * - passthrough: 保留多模态结构，支持视觉模型直接理解图片
+ * - legacy_text_embed: 下载图片并将本地路径嵌入文本（兼容旧链路）
  */
 async function preprocessOpenAIMessages(
-  messages: Array<{ role: string; content: string | Array<{ type: string; image_url?: { url: string }; text?: string }> }>,
-  logger: { info: (msg: string) => void; warn: (msg: string) => void }
-): Promise<Array<{ role: string; content: string }>> {
-  const result: Array<{ role: string; content: string }> = [];
+  messages: OpenAIMessageLike[],
+  logger: { info: (msg: string) => void; warn: (msg: string) => void },
+  visionMode: "passthrough" | "legacy_text_embed"
+): Promise<OpenAIMessageLike[]> {
+  const result: OpenAIMessageLike[] = [];
 
   for (const msg of messages) {
     if (typeof msg.content === "string") {
@@ -109,6 +121,33 @@ async function preprocessOpenAIMessages(
 
     if (!Array.isArray(msg.content)) {
       result.push({ role: msg.role, content: String(msg.content) });
+      continue;
+    }
+
+    if (visionMode === "passthrough") {
+      const normalized: OpenAIContentPart[] = [];
+      for (const part of msg.content) {
+        if (part.type === "text") {
+          if (part.text) {
+            normalized.push({ type: "text", text: part.text });
+          }
+          continue;
+        }
+
+        if (part.type === "image_url" && part.image_url?.url) {
+          normalized.push({
+            type: "image_url",
+            image_url: { url: part.image_url.url },
+          });
+          continue;
+        }
+      }
+
+      if (normalized.length > 0) {
+        result.push({ role: msg.role, content: normalized });
+      } else {
+        logger.warn("[Lingzhu] 多模态消息未包含可用文本或图片，已跳过");
+      }
       continue;
     }
 
@@ -126,8 +165,8 @@ async function preprocessOpenAIMessages(
         if (url.startsWith("file://")) {
           imagePaths.push(url.replace("file://", ""));
         } else if (url.startsWith("data:")) {
-          // data URL 暂不处理，跳过
-          logger.warn(`[Lingzhu] data URL 暂不支持，跳过`);
+          // legacy 模式下不建议 data URL，避免超长文本注入
+          logger.warn("[Lingzhu] legacy_text_embed 模式不支持 data URL，已跳过");
         } else {
           // 下载图片到本地文件
           logger.info(`[Lingzhu] 正在下载图片到本地: ${url.substring(0, 80)}...`);
@@ -228,9 +267,10 @@ export function createHttpHandler(api: any, getConfig: () => LingzhuConfig) {
         includeMetadata ? body.metadata : undefined
       );
 
-      // 预处理消息：下载图片并为纯图片消息添加占位文本
-      openaiMessages = await preprocessOpenAIMessages(openaiMessages as any, logger);
-      logger.info(`[Lingzhu] includeMetadata=${includeMetadata}, openaiMessages=${JSON.stringify(openaiMessages)}`);
+      // 预处理消息：默认多模态透传；可选 legacy 文本嵌入模式兜底
+      const visionMode = config.visionMode === "legacy_text_embed" ? "legacy_text_embed" : "passthrough";
+      openaiMessages = await preprocessOpenAIMessages(openaiMessages as OpenAIMessageLike[], logger, visionMode);
+      logger.info(`[Lingzhu] includeMetadata=${includeMetadata}, visionMode=${visionMode}, openaiMessages=${JSON.stringify(openaiMessages)}`);
 
 
       // 生成 session key

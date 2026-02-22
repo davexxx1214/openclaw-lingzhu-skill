@@ -7,6 +7,12 @@ export interface LingzhuConfig {
   agentId?: string;
   /** 是否将设备信息（metadata）传递给 OpenClaw，默认 true */
   includeMetadata?: boolean;
+  /**
+   * 图片处理模式：
+   * - passthrough: 多模态透传给视觉模型（默认）
+   * - legacy_text_embed: 下载图片后将本地路径注入文本（兼容旧链路）
+   */
+  visionMode?: "passthrough" | "legacy_text_embed";
 }
 
 /**

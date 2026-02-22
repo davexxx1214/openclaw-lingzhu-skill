@@ -12,6 +12,14 @@
     "agentId": {
       "label": "智能体 ID",
       "help": "使用的 OpenClaw 智能体 ID，默认 main"
+    },
+    "includeMetadata": {
+      "label": "同步设备信息",
+      "help": "将灵珠 metadata（时间/位置/电量等）注入模型上下文，默认开启"
+    },
+    "visionMode": {
+      "label": "图片处理模式",
+      "help": "passthrough=多模态直通；legacy_text_embed=旧版文本路径注入"
     }
   },
   "configSchema": {
@@ -28,6 +36,18 @@
       "agentId": {
         "type": "string",
         "default": "main"
+      },
+      "includeMetadata": {
+        "type": "boolean",
+        "default": true
+      },
+      "visionMode": {
+        "type": "string",
+        "enum": [
+          "passthrough",
+          "legacy_text_embed"
+        ],
+        "default": "passthrough"
       }
     }
   }

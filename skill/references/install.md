@@ -1,12 +1,12 @@
 ---
 name: lingzhu
-description: 灵珠平台接入 - 将 Moltbot 接入灵珠智能体平台
+description: 灵珠平台接入 - 将 OpenClaw 接入灵珠智能体平台
 metadata: {"openclaw":{"emoji":"🔗","requires":{"plugins":["lingzhu"],"config":["gateway.http.endpoints.chatCompletions.enabled"]}}}
 ---
 
 # 灵珠平台接入
 
-灵珠平台是一个第三方智能体平台，通过 lingzhu 插件可以将 Moltbot 接入灵珠平台。
+灵珠平台是一个第三方智能体平台，通过 lingzhu 插件可以将 OpenClaw 接入灵珠平台。
 
 ## 安装步骤
 
@@ -35,6 +35,11 @@ openclaw plugins install --link {baseDir}/extension
 }
 ```
 
+### 2.1 图片理解前置条件（推荐）
+
+- OpenClaw 侧已配置支持视觉输入的模型。
+- 插件配置 `visionMode` 保持默认值 `passthrough`（多模态透传）。
+
 ### 3. 重启 Gateway
 
 ```bash
@@ -53,6 +58,28 @@ openclaw lingzhu info
 
 ```bash
 openclaw lingzhu status
+```
+
+## 推荐插件配置
+
+在 `moltbot.json` 或 OpenClaw 对应配置中：
+
+```json5
+{
+  "plugins": {
+    "entries": {
+      "lingzhu": {
+        "enabled": true,
+        "config": {
+          "authAk": "",
+          "agentId": "main",
+          "includeMetadata": true,
+          "visionMode": "passthrough"
+        }
+      }
+    }
+  }
+}
 ```
 
 ## 提交给灵珠平台

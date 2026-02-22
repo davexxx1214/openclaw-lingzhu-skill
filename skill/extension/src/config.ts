@@ -4,6 +4,8 @@ const DEFAULT_CONFIG: Required<LingzhuConfig> = {
   enabled: true,
   authAk: "",
   agentId: "main",
+  includeMetadata: true,
+  visionMode: "passthrough",
 };
 
 /**
@@ -15,6 +17,8 @@ export function resolveLingzhuConfig(raw: unknown): LingzhuConfig {
     enabled: cfg.enabled ?? DEFAULT_CONFIG.enabled,
     authAk: cfg.authAk ?? DEFAULT_CONFIG.authAk,
     agentId: cfg.agentId ?? DEFAULT_CONFIG.agentId,
+    includeMetadata: cfg.includeMetadata ?? DEFAULT_CONFIG.includeMetadata,
+    visionMode: cfg.visionMode ?? DEFAULT_CONFIG.visionMode,
   };
 }
 
@@ -43,6 +47,8 @@ export const lingzhuConfigSchema = {
     enabled: { type: "boolean" as const },
     authAk: { type: "string" as const },
     agentId: { type: "string" as const },
+    includeMetadata: { type: "boolean" as const },
+    visionMode: { type: "string" as const, enum: ["passthrough", "legacy_text_embed"] as const },
   },
   parse(value: unknown): LingzhuConfig {
     return resolveLingzhuConfig(value);
@@ -57,6 +63,14 @@ export const lingzhuConfigSchema = {
     agentId: {
       label: "智能体 ID",
       help: "使用的 OpenClaw 智能体 ID，默认 main",
+    },
+    includeMetadata: {
+      label: "同步设备信息",
+      help: "将灵珠 metadata（时间/位置/电量等）注入模型上下文，默认开启",
+    },
+    visionMode: {
+      label: "图片处理模式",
+      help: "passthrough=多模态直通；legacy_text_embed=旧版文本路径注入",
     },
   },
 };

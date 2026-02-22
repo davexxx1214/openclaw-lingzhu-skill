@@ -44,13 +44,21 @@ openclaw plugins install -l ./extensions/lingzhu
         "enabled": true,
         "config": {
           "authAk": "your-secret-ak",  // 可选，留空自动生成
-          "agentId": "main"             // 可选，默认 main
+          "agentId": "main",            // 可选，默认 main
+          "includeMetadata": true,      // 可选，默认 true
+          "visionMode": "passthrough"   // 可选，默认 passthrough
         }
       }
     }
   }
 }
 ```
+
+### 图片理解前置条件
+
+- OpenClaw 已启用支持图片输入的视觉模型。
+- `visionMode=passthrough`：多模态消息原样透传（推荐）。
+- `visionMode=legacy_text_embed`：兼容旧链路，将图片下载后以本地路径注入文本。
 
 ## 使用
 
@@ -113,6 +121,22 @@ curl --location 'https://<您的域名>/metis/agent/api/sse' \
   ]
 }'
 
+```
+
+### 图片理解测试（多模态）
+
+```bash
+curl -X POST 'http://127.0.0.1:18789/metis/agent/api/sse' \
+--header 'Authorization: Bearer {your key}' \
+--header 'Content-Type: application/json' \
+--data '{
+  "message_id": "test_vision_01",
+  "agent_id": "main",
+  "message": [
+    {"role": "user", "type": "text", "text": "请描述这张图里有什么"},
+    {"role": "user", "type": "image", "image_url": "https://example.com/demo.jpg"}
+  ]
+}'
 ```
 
 ## API 端点
