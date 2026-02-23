@@ -104,11 +104,24 @@ function sendToolCall(res, messageId, command, params) {
 // ─── Express 应用 ──────────────────────────────────────────────
 
 const app = express();
+
+// 请求日志中间件 —— 所有请求都会打印
+app.use((req, res, next) => {
+    const ts = new Date().toISOString();
+    console.log(`[${ts}] --> ${req.method} ${req.url} from ${req.ip}`);
+    console.log(`[${ts}]     Headers: ${JSON.stringify(req.headers)}`);
+    res.on('finish', () => {
+        console.log(`[${ts}] <-- ${req.method} ${req.url} ${res.statusCode}`);
+    });
+    next();
+});
+
 app.use(express.json({ limit: '50mb' }));
 
 // JSON 解析错误处理
 app.use((err, req, res, next) => {
     if (err.type === 'entity.parse.failed') {
+        console.error('[请求] JSON 解析失败:', err.message);
         return res.status(400).json({ error: '请求体 JSON 格式错误' });
     }
     next(err);
@@ -118,12 +131,15 @@ app.use((err, req, res, next) => {
 function authMiddleware(req, res, next) {
     const auth = req.headers.authorization;
     if (!auth || !auth.startsWith('Bearer ')) {
+        console.warn('[鉴权] 失败: 缺少 Authorization header');
         return res.status(401).json({ error: '缺少 Authorization header' });
     }
     const ak = auth.slice(7);
     if (ak !== LINGZHU_AUTH_AK) {
+        console.warn(`[鉴权] 失败: AK 不匹配 (收到: ${ak.slice(0, 8)}...)`);
         return res.status(403).json({ error: '鉴权失败' });
     }
+    console.log('[鉴权] 通过');
     next();
 }
 
@@ -134,6 +150,8 @@ app.get('/health', (req, res) => {
 
 // 灵珠 SSE 端点
 app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
+    console.log('[SSE] 收到灵珠请求, body:', JSON.stringify(req.body, null, 2));
+
     const { message_id, message, metadata } = req.body;
     const messageId = message_id || crypto.randomUUID();
 
@@ -247,6 +265,12 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             // 连接可能已断开
         }
     }
+});
+
+// 未匹配路由 catch-all
+app.use((req, res) => {
+    console.warn(`[路由] 未匹配: ${req.method} ${req.url}`);
+    res.status(404).json({ error: `未知路由: ${req.method} ${req.url}` });
 });
 
 // ─── 获取本机 IP ────────────────────────────────────────────────
