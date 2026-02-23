@@ -39,6 +39,7 @@ const WEBAR_PORT = parseInt((config.web?.port || ':3000').replace(':', ''), 10);
 
 const LINGZHU_PORT = lingzhuConfig.port || 18789;
 const LINGZHU_AUTH_AK = lingzhuConfig.authAk || crypto.randomUUID();
+const LINGZHU_FORCE_TAKE_PHOTO = lingzhuConfig.forceTakePhoto === true;
 
 // ─── Token 缓存 ────────────────────────────────────────────────
 
@@ -231,9 +232,9 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         const textForIntent = (userText || '').trim();
 
-        // 如果没有图片，按意图决定是否触发拍照
+        // 如果没有图片，可配置为强制触发拍照（便于调试）
         if (!imageUrl) {
-            if (/拍照|拍一下|识别|扫一扫|看看/.test(textForIntent)) {
+            if (LINGZHU_FORCE_TAKE_PHOTO || /拍照|拍一下|识别|扫一扫|看看/.test(textForIntent)) {
                 sendAnswer(res, messageId, agentId, '收到，正在为你打开拍照识别。');
                 sendToolCall(res, messageId, agentId, {
                     command: 'take_photo',
