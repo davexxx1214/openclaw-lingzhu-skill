@@ -151,17 +151,15 @@ function streamAnswer(res, messageId, agentId, text) {
     });
 }
 
-function sendAnswer(res, messageId, agentId, text, isFinish = false, followUp) {
-    const data = {
+function sendAnswer(res, messageId, agentId, text, isFinish = false) {
+    sendSSE(res, {
         role: 'agent',
         type: 'answer',
         answer_stream: text,
         message_id: messageId,
         agent_id: agentId,
         is_finish: isFinish,
-    };
-    if (followUp) data.follow_up = followUp;
-    sendSSE(res, data);
+    });
 }
 
 function sendToolCall(res, messageId, agentId, toolCall) {
@@ -268,6 +266,29 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         }
     });
 
+    // 心跳定时器 —— 在长耗时图片处理期间保持 SSE 连接活跃
+    let keepAliveTimer = null;
+    function startKeepAlive() {
+        keepAliveTimer = setInterval(() => {
+            if (clientGone || res.writableEnded) {
+                clearInterval(keepAliveTimer);
+                return;
+            }
+            try {
+                res.write(`: heartbeat ${Date.now()}\n\n`);
+                console.log(`[SSE] >> heartbeat (${Date.now() - reqStartMs}ms)`);
+            } catch (_) {
+                clearInterval(keepAliveTimer);
+            }
+        }, 1500);
+    }
+    function stopKeepAlive() {
+        if (keepAliveTimer) {
+            clearInterval(keepAliveTimer);
+            keepAliveTimer = null;
+        }
+    }
+
     try {
         // 提取图片和文本
         const messages = message || [];
@@ -293,7 +314,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         const textForIntent = (userText || '').trim();
 
-        // 无图片分支 —— 快速响应，不需要心跳
+        // 无图片分支 —— 快速响应
         if (!imageUrl) {
             resetRetry(userId);
             if (LINGZHU_FORCE_TAKE_PHOTO || /拍照|拍一下|识别|扫一扫|看看/.test(textForIntent)) {
@@ -311,8 +332,9 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         }
 
         // ── 图片处理分支 ──
-        // 不发送中间消息：Rokid 平台收到第一条 answer 后会启动短超时，
-        // 导致后续结果被丢弃。保持静默直到结果就绪再一次性发送。
+        // 立即发送第一条数据 + 启动心跳，防止 Rokid 平台因空闲超时断开连接
+        sendAnswer(res, messageId, agentId, '正在识别图片，请稍候...');
+        startKeepAlive();
 
         // 1+2. 图片下载 和 token 获取 **并行** 执行（节省 ~1s）
         console.log(`[识别] 下载图片: ${imageUrl}`);
@@ -331,49 +353,43 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             imageBase64 = imgResult;
             tokenResult = tkResult;
         } catch (e) {
+            stopKeepAlive();
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             const msg = e.message.includes('token') || e.message.includes('Token')
-                ? `EasyAR 服务连接失败，请说"拍照"重试。`
-                : `图片处理失败，请说"拍照"重试。`;
-            console.log(`[错误] ${msg}: ${e.message}`);
-            sendAnswer(res, messageId, agentId, msg, true, ['拍照']);
+                ? `EasyAR 服务连接失败: ${e.message}`
+                : `图片下载失败: ${e.message}`;
+            sendAnswer(res, messageId, agentId, msg);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
         }
 
-        if (clientGone) { console.log('[SSE] 客户端已断开, 跳过识别'); return; }
+        if (clientGone) { stopKeepAlive(); console.log('[SSE] 客户端已断开, 跳过识别'); return; }
 
-        // 3. 调用 EasyAR 云识别（动态超时：总预算 - 已用时间）
-        const elapsed = Date.now() - reqStartMs;
-        const recognizeTimeout = Math.max(GLASSES_TIMEOUT_MS - elapsed - 200, 500);
-        console.log(`[识别] 调用 EasyAR 云识别... (超时: ${recognizeTimeout}ms)`);
+        // 3. 调用 EasyAR 云识别（不设激进超时，让 EasyAR 正常返回结果）
+        console.log('[识别] 调用 EasyAR 云识别...');
         let result;
         try {
             result = await recognize(
                 EASYAR_CLIENT_END_URL,
                 tokenResult.token,
                 tokenResult.crsAppId || EASYAR_CRS_APPID,
-                imageBase64,
-                recognizeTimeout
+                imageBase64
             );
             console.log(`[计时] EasyAR识别: ${Date.now() - reqStartMs}ms`);
         } catch (e) {
+            stopKeepAlive();
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
-            const isTimeout = e.message.includes('超时');
-            const msg = isTimeout
-                ? '识别超时，请说"拍照"重试。'
-                : `识别请求失败，请说"拍照"重试。`;
-            console.log(`[计时] EasyAR失败: ${Date.now() - reqStartMs}ms (${isTimeout ? '超时' : '错误'}): ${e.message}`);
-            sendAnswer(res, messageId, agentId, msg, true, ['拍照']);
+            sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
         }
 
+        stopKeepAlive();
         if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
 
         // 4. 处理识别结果
-        // Rokid 平台在图片上下文中只接受含 tool_call 的响应，
-        // 纯文本 answer 会导致应用退出。失败时用 take_photo 自动重拍。
         if (!result || !result.target) {
             const retries = incrementRetry(userId);
             const remaining = LINGZHU_MAX_RETRIES - retries;
@@ -381,13 +397,13 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
             if (remaining > 0) {
                 sendAnswer(res, messageId, agentId,
-                    `未识别到匹配的目标，请对准标识物后说"拍照"重试。(剩余${remaining}次)`,
-                    true, ['拍照']);
+                    `未识别到匹配的目标，请对准标识物重新拍照。(剩余${remaining}次)`);
+                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             } else {
                 resetRetry(userId);
                 sendAnswer(res, messageId, agentId,
-                    '多次识别未成功，请确认标识物是否正确后重新唤起助手再试。',
-                    true, ['拍照', '退出']);
+                    '多次识别未成功，请确认标识物是否正确后重新唤起助手再试。');
+                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             }
             sendSSEDone(res, messageId, agentId);
             console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (未识别)`);
@@ -412,17 +428,20 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             const info = meta
                 ? `识别到: ${target.name}\n详细信息: ${JSON.stringify(meta, null, 2)}`
                 : `识别到: ${target.name}`;
-            sendAnswer(res, messageId, agentId, info, true);
+            sendAnswer(res, messageId, agentId, info);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
         }
 
         sendSSEDone(res, messageId, agentId);
         console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (完成)`);
 
     } catch (e) {
+        stopKeepAlive();
         console.error('[错误]', e);
         try {
             if (!clientGone) {
-                sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`, true);
+                sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`);
+                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
                 sendSSEDone(res, messageId, agentId);
             }
         } catch (_) {
