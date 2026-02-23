@@ -279,7 +279,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         try {
             imageBase64 = await downloadImageAsBase64(imageUrl);
         } catch (e) {
-            sendAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`, true);
+            sendAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
         }
@@ -289,7 +290,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         try {
             tokenResult = await ensureToken();
         } catch (e) {
-            sendAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`, true);
+            sendAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
         }
@@ -305,15 +307,19 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 imageBase64
             );
         } catch (e) {
-            sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`, true);
+            sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
         }
 
         // 4. 处理识别结果
         if (!result || !result.target) {
-            // 识图失败时发送单条最终消息，避免客户端丢弃流式中间态
-            sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。', true);
+            // Rokid 客户端在有 tool_call 跟随时才稳定渲染 answer 文本
+            sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。');
+            sendToolCall(res, messageId, agentId, {
+                command: 'take_photo',
+            });
             sendSSEDone(res, messageId, agentId);
             return;
         }
@@ -356,7 +362,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
     } catch (e) {
         console.error('[错误]', e);
         try {
-            sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`, true);
+            sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
         } catch (_) {
             // 连接可能已断开
