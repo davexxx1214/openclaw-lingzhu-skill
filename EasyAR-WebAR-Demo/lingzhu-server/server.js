@@ -358,8 +358,12 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             const currentRetries = incrementRetry(userId);
             if (currentRetries < LINGZHU_MAX_RETRIES) {
-                sendAnswer(res, messageId, agentId, `图片处理失败: ${e.message}。正在重试...`);
-                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+                sendAnswer(res, messageId, agentId, `图片处理失败: ${e.message}。正在重试...`, true);
+                setTimeout(() => {
+                    sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+                    sendSSEDone(res, messageId, agentId);
+                }, 500);
+                return;
             } else {
                 sendAnswer(res, messageId, agentId, `图片处理失败: ${e.message}。已达到最大重试次数。`);
                 resetRetry(userId);
@@ -386,8 +390,12 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             const currentRetries = incrementRetry(userId);
             if (currentRetries < LINGZHU_MAX_RETRIES) {
-                sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}。正在重试...`);
-                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+                sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}。正在重试...`, true);
+                setTimeout(() => {
+                    sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+                    sendSSEDone(res, messageId, agentId);
+                }, 500);
+                return;
             } else {
                 sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}。已达到最大重试次数。`);
                 resetRetry(userId);
@@ -403,9 +411,13 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         if (!result || !result.target) {
             const currentRetries = incrementRetry(userId);
             if (currentRetries < LINGZHU_MAX_RETRIES) {
-                sendAnswer(res, messageId, agentId, `未识别到匹配的目标，正在进行第 ${currentRetries} 次重试...`);
-                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+                sendAnswer(res, messageId, agentId, `未匹配到目标，发起第 ${currentRetries} 次重试...`, true);
                 console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (未识别，发起第 ${currentRetries} 次重试)`);
+                setTimeout(() => {
+                    sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+                    sendSSEDone(res, messageId, agentId);
+                }, 500);
+                return;
             } else {
                 sendAnswer(res, messageId, agentId, '已连续多次未识别到匹配的目标，请对准标识物重新尝试。');
                 resetRetry(userId);
@@ -447,8 +459,12 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             if (!clientGone) {
                 const currentRetries = incrementRetry(userId);
                 if (currentRetries < LINGZHU_MAX_RETRIES) {
-                    sendAnswer(res, messageId, agentId, `服务异常: ${e.message}。正在重试...`);
-                    sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+                    sendAnswer(res, messageId, agentId, `服务异常: ${e.message}。重试中...`, true);
+                    setTimeout(() => {
+                        sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+                        sendSSEDone(res, messageId, agentId);
+                    }, 500);
+                    return;
                 } else {
                     sendAnswer(res, messageId, agentId, `服务异常: ${e.message}。已达到最大重试次数。`);
                     resetRetry(userId);
