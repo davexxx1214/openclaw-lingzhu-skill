@@ -270,7 +270,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         try {
             imageBase64 = await downloadImageAsBase64(imageUrl);
         } catch (e) {
-            sendAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`, true);
+            await streamAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`);
+            await sleep(120);
             sendSSEDone(res);
             return;
         }
@@ -280,7 +281,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         try {
             tokenResult = await ensureToken();
         } catch (e) {
-            sendAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`, true);
+            await streamAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`);
+            await sleep(120);
             sendSSEDone(res);
             return;
         }
@@ -296,20 +298,17 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 imageBase64
             );
         } catch (e) {
-            sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`, true);
+            await streamAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`);
+            await sleep(120);
             sendSSEDone(res);
             return;
         }
 
         // 4. 处理识别结果
         if (!result || !result.target) {
-            if (LINGZHU_IMAGE_ONLY) {
-                sendToolCall(res, messageId, agentId, {
-                    command: 'take_photo',
-                });
-            } else {
-                sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。', true);
-            }
+            // 用户要求：识图失败时也要把提示发到眼镜端
+            await streamAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。');
+            await sleep(120);
             sendSSEDone(res);
             return;
         }
@@ -343,7 +342,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 const info = meta
                     ? `识别到: ${target.name}\n详细信息: ${JSON.stringify(meta, null, 2)}`
                     : `识别到: ${target.name}`;
-                sendAnswer(res, messageId, agentId, info, true);
+                await streamAnswer(res, messageId, agentId, info);
+                await sleep(120);
             }
         }
 
@@ -352,7 +352,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
     } catch (e) {
         console.error('[错误]', e);
         try {
-            sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`, true);
+            await streamAnswer(res, messageId, agentId, `服务异常: ${e.message}`);
+            await sleep(120);
             sendSSEDone(res);
         } catch (_) {
             // 连接可能已断开
