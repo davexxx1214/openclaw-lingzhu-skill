@@ -84,6 +84,10 @@ function sendSSEDone(res) {
     res.end();
 }
 
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function streamAnswer(res, messageId, agentId, text) {
     return new Promise((resolve) => {
         // 先发内容（is_finish=false）
@@ -199,11 +203,14 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
     // 设置 SSE 响应头
     res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
         'Connection': 'keep-alive',
         'X-Accel-Buffering': 'no',
     });
+    if (typeof res.flushHeaders === 'function') {
+        res.flushHeaders();
+    }
 
     try {
         // 提取图片和文本
@@ -248,10 +255,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // 1. 发送"正在识别"状态
-        sendAnswer(res, messageId, agentId, '正在识别图片...');
-
-        // 2. 下载图片并转 Base64
+        // 1. 下载图片并转 Base64
         console.log(`[识别] 下载图片: ${imageUrl}`);
         let imageBase64;
         try {
@@ -262,7 +266,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // 3. 获取 token
+        // 2. 获取 token
         let tokenResult;
         try {
             tokenResult = await ensureToken();
@@ -272,7 +276,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // 4. 调用 EasyAR 云识别
+        // 3. 调用 EasyAR 云识别
         console.log('[识别] 调用 EasyAR 云识别...');
         let result;
         try {
@@ -304,6 +308,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         if (meta && meta.destination) {
             // 这是一条完整文本，不是增量流，需标记 is_finish=true，客户端才会稳定展示
             sendAnswer(res, messageId, agentId, `识别成功: ${target.name}，正在启动导航到 ${meta.destination}...`, true);
+            // 给客户端一点渲染窗口，避免文本被紧随其后的 tool_call 覆盖
+            await sleep(120);
 
             sendToolCall(res, messageId, agentId, {
                 command: 'take_navigation',
