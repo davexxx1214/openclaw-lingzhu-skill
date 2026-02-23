@@ -331,9 +331,11 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         } catch (e) {
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             const msg = e.message.includes('token') || e.message.includes('Token')
-                ? `EasyAR 服务连接失败: ${e.message}`
-                : `图片处理失败: ${e.message}`;
-            sendAnswer(res, messageId, agentId, msg, true);
+                ? `EasyAR 服务连接失败，正在重试...`
+                : `图片处理失败，正在重试...`;
+            console.log(`[错误] ${msg}: ${e.message}`);
+            sendAnswer(res, messageId, agentId, msg);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
         }
@@ -358,10 +360,11 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             const isTimeout = e.message.includes('超时');
             const msg = isTimeout
-                ? '识别超时，请说"拍照"重试。'
-                : `识别请求失败: ${e.message}`;
-            console.log(`[计时] EasyAR失败: ${Date.now() - reqStartMs}ms (${isTimeout ? '超时' : '错误'})`);
-            sendAnswer(res, messageId, agentId, msg, true);
+                ? '识别超时，正在自动重试...'
+                : `识别请求失败，正在重试...`;
+            console.log(`[计时] EasyAR失败: ${Date.now() - reqStartMs}ms (${isTimeout ? '超时' : '错误'}): ${e.message}`);
+            sendAnswer(res, messageId, agentId, msg);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
         }
@@ -369,8 +372,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
 
         // 4. 处理识别结果
-        // 注意：Rokid 眼镜不支持在图片上下文中触发 take_photo，
-        // 识别失败只能返回文字提示，由用户手动说话触发重拍。
+        // Rokid 平台在图片上下文中只接受含 tool_call 的响应，
+        // 纯文本 answer 会导致应用退出。失败时用 take_photo 自动重拍。
         if (!result || !result.target) {
             const retries = incrementRetry(userId);
             const remaining = LINGZHU_MAX_RETRIES - retries;
@@ -378,7 +381,10 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
             if (remaining > 0) {
                 sendAnswer(res, messageId, agentId,
-                    `未识别到匹配的目标，请对准标识物后说"拍照"重试。(剩余${remaining}次)`, true);
+                    `未识别到匹配的目标，正在自动重新拍照...(剩余${remaining}次)`);
+                sendToolCall(res, messageId, agentId, {
+                    command: 'take_photo',
+                });
             } else {
                 resetRetry(userId);
                 sendAnswer(res, messageId, agentId,
