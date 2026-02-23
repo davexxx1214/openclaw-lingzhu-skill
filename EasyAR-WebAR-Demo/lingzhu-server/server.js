@@ -231,12 +231,18 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         const textForIntent = (userText || '').trim();
 
-        // 如果没有图片，统一先触发 take_photo（诊断模式）
+        // 如果没有图片，按意图决定是否触发拍照
         if (!imageUrl) {
-            sendAnswer(res, messageId, agentId, '收到，正在为你打开拍照识别。');
-            sendToolCall(res, messageId, agentId, {
-                command: 'take_photo',
-            });
+            if (/拍照|拍一下|识别|扫一扫|看看/.test(textForIntent)) {
+                sendAnswer(res, messageId, agentId, '收到，正在为你打开拍照识别。');
+                sendToolCall(res, messageId, agentId, {
+                    command: 'take_photo',
+                });
+                sendSSEDone(res);
+                return;
+            }
+
+            await streamAnswer(res, messageId, agentId, '请拍照后发送图片，我会识别并导航到对应地点。');
             sendSSEDone(res);
             return;
         }

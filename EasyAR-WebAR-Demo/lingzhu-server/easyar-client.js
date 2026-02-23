@@ -6,6 +6,13 @@
 const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
+let sharp = null;
+try {
+    // 可选依赖：用于将 webp 转成 jpeg，提升 EasyAR 兼容性
+    sharp = require('sharp');
+} catch (_) {
+    // 未安装 sharp 时仍可运行，只是无法自动转码
+}
 
 /**
  * 生成 EasyAR Cloud Recognition Token
@@ -125,11 +132,32 @@ async function downloadImageAsBase64(imageUrl) {
                 return downloadImageAsBase64(res.headers.location).then(resolve).catch(reject);
             }
 
+            if (res.statusCode !== 200) {
+                return reject(new Error(`图片下载失败，HTTP ${res.statusCode}`));
+            }
+
             const chunks = [];
             res.on('data', chunk => chunks.push(chunk));
-            res.on('end', () => {
-                const buffer = Buffer.concat(chunks);
-                resolve(buffer.toString('base64'));
+            res.on('end', async () => {
+                try {
+                    let buffer = Buffer.concat(chunks);
+                    const contentType = (res.headers['content-type'] || '').toLowerCase();
+                    console.log(`[图片] 下载完成: content-type=${contentType || '(unknown)'}, bytes=${buffer.length}`);
+
+                    // EasyAR 对 webp 兼容不稳定，统一转 jpeg 后再识别
+                    if (contentType.includes('image/webp')) {
+                        if (sharp) {
+                            buffer = await sharp(buffer).jpeg({ quality: 92 }).toBuffer();
+                            console.log(`[图片] webp -> jpeg 转码成功, bytes=${buffer.length}`);
+                        } else {
+                            console.warn('[图片] 当前是 webp，且未安装 sharp，可能导致 EasyAR 识别失败');
+                        }
+                    }
+
+                    resolve(buffer.toString('base64'));
+                } catch (e) {
+                    reject(new Error(`图片处理失败: ${e.message}`));
+                }
             });
         }).on('error', reject);
     });
