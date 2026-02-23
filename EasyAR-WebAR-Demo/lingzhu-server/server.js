@@ -40,6 +40,7 @@ const WEBAR_PORT = parseInt((config.web?.port || ':3000').replace(':', ''), 10);
 const LINGZHU_PORT = lingzhuConfig.port || 18789;
 const LINGZHU_AUTH_AK = lingzhuConfig.authAk || crypto.randomUUID();
 const LINGZHU_FORCE_TAKE_PHOTO = lingzhuConfig.forceTakePhoto === true;
+const LINGZHU_IMAGE_ONLY = lingzhuConfig.imageOnly === true;
 
 // ─── Token 缓存 ────────────────────────────────────────────────
 
@@ -239,8 +240,16 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         const textForIntent = (userText || '').trim();
 
-        // 如果没有图片，可配置为强制触发拍照（便于调试）
+        // 图片模式：无图时直接触发拍照，不返回文字
         if (!imageUrl) {
+            if (LINGZHU_IMAGE_ONLY) {
+                sendToolCall(res, messageId, agentId, {
+                    command: 'take_photo',
+                });
+                sendSSEDone(res);
+                return;
+            }
+
             if (LINGZHU_FORCE_TAKE_PHOTO || /拍照|拍一下|识别|扫一扫|看看/.test(textForIntent)) {
                 sendAnswer(res, messageId, agentId, '收到，正在为你打开拍照识别。');
                 sendToolCall(res, messageId, agentId, {
@@ -292,9 +301,15 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // 5. 处理识别结果
+        // 4. 处理识别结果
         if (!result || !result.target) {
-            sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。', true);
+            if (LINGZHU_IMAGE_ONLY) {
+                sendToolCall(res, messageId, agentId, {
+                    command: 'take_photo',
+                });
+            } else {
+                sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。', true);
+            }
             sendSSEDone(res);
             return;
         }
@@ -306,10 +321,12 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         const meta = parseMeta(target.meta);
 
         if (meta && meta.destination) {
-            // 这是一条完整文本，不是增量流，需标记 is_finish=true，客户端才会稳定展示
-            sendAnswer(res, messageId, agentId, `识别成功: ${target.name}，正在启动导航到 ${meta.destination}...`, true);
-            // 给客户端一点渲染窗口，避免文本被紧随其后的 tool_call 覆盖
-            await sleep(120);
+            if (!LINGZHU_IMAGE_ONLY) {
+                // 这是一条完整文本，不是增量流，需标记 is_finish=true，客户端才会稳定展示
+                sendAnswer(res, messageId, agentId, `识别成功: ${target.name}，正在启动导航到 ${meta.destination}...`, true);
+                // 给客户端一点渲染窗口，避免文本被紧随其后的 tool_call 覆盖
+                await sleep(120);
+            }
 
             sendToolCall(res, messageId, agentId, {
                 command: 'take_navigation',
@@ -318,10 +335,16 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 navi_type: meta.navi_type || '1',
             });
         } else {
-            const info = meta
-                ? `识别到: ${target.name}\n详细信息: ${JSON.stringify(meta, null, 2)}`
-                : `识别到: ${target.name}`;
-            sendAnswer(res, messageId, agentId, info, true);
+            if (LINGZHU_IMAGE_ONLY) {
+                sendToolCall(res, messageId, agentId, {
+                    command: 'take_photo',
+                });
+            } else {
+                const info = meta
+                    ? `识别到: ${target.name}\n详细信息: ${JSON.stringify(meta, null, 2)}`
+                    : `识别到: ${target.name}`;
+                sendAnswer(res, messageId, agentId, info, true);
+            }
         }
 
         sendSSEDone(res);
@@ -371,6 +394,7 @@ app.listen(LINGZHU_PORT, '0.0.0.0', () => {
     console.log(`║  本机 IP:   ${localIP}`.padEnd(72) + '║');
     console.log(`║  SSE 端点:  ${ssePathLocal}`.padEnd(72) + '║');
     console.log(`║  鉴权 AK:   ${LINGZHU_AUTH_AK}`.padEnd(72) + '║');
+    console.log(`║  图片模式:  ${LINGZHU_IMAGE_ONLY ? '开启(仅图片流程)' : '关闭(支持文字回复)'}`.padEnd(72) + '║');
     console.log(`║  EasyAR:    ${EASYAR_CLIENT_END_URL || '(未配置)'}`.padEnd(72) + '║');
     console.log('╠═══════════════════════════════════════════════════════════════════════╣');
     console.log('║  提交到灵珠平台:                                                      ║');
