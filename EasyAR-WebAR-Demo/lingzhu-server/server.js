@@ -330,36 +330,35 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // ── 图片处理分支 —— 耗时操作，需要保活 ──
+        // ── 图片处理分支 —— Rokid 平台约 2s 超时，必须尽快完成 ──
 
-        // 立即发送第一条数据，防止客户端因空闲超时断开
+        // 立即发送第一条数据
         sendAnswer(res, messageId, agentId, '正在识别图片，请稍候...');
         startKeepAlive();
 
-        // 1. 下载图片并转 Base64
+        // 1+2. 图片下载 和 token 获取 **并行** 执行（节省 ~1s）
         console.log(`[识别] 下载图片: ${imageUrl}`);
-        let imageBase64;
+        let imageBase64, tokenResult;
         try {
-            imageBase64 = await downloadImageAsBase64(imageUrl);
-            console.log(`[计时] 图片下载+转码: ${Date.now() - reqStartMs}ms`);
+            const [imgResult, tkResult] = await Promise.all([
+                downloadImageAsBase64(imageUrl).then(b64 => {
+                    console.log(`[计时] 图片下载+转码: ${Date.now() - reqStartMs}ms`);
+                    return b64;
+                }),
+                ensureToken().then(tk => {
+                    console.log(`[计时] 获取token: ${Date.now() - reqStartMs}ms`);
+                    return tk;
+                }),
+            ]);
+            imageBase64 = imgResult;
+            tokenResult = tkResult;
         } catch (e) {
             stopKeepAlive();
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
-            sendAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`);
-            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
-            sendSSEDone(res, messageId, agentId);
-            return;
-        }
-
-        // 2. 获取 token
-        let tokenResult;
-        try {
-            tokenResult = await ensureToken();
-            console.log(`[计时] 获取token: ${Date.now() - reqStartMs}ms`);
-        } catch (e) {
-            stopKeepAlive();
-            if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
-            sendAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`);
+            const msg = e.message.includes('token') || e.message.includes('Token')
+                ? `EasyAR 服务连接失败: ${e.message}`
+                : `图片处理失败: ${e.message}`;
+            sendAnswer(res, messageId, agentId, msg);
             sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
@@ -494,4 +493,11 @@ app.listen(LINGZHU_PORT, '0.0.0.0', () => {
     console.log('║  (若服务器有独立公网 IP，上面显示的 IP 即可直接使用)'.padEnd(68) + '║');
     console.log('╚═══════════════════════════════════════════════════════════════════════╝');
     console.log('');
+
+    // 预加载 EasyAR token，避免首次请求冷启动耗时
+    ensureToken().then(() => {
+        console.log('[启动] EasyAR token 预加载成功');
+    }).catch((e) => {
+        console.warn(`[启动] EasyAR token 预加载失败: ${e.message}（首次请求时会重试）`);
+    });
 });
