@@ -257,12 +257,12 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         res.socket.setNoDelay(true);
     }
 
-    // 客户端断开检测
+    // 客户端断开检测（必须监听 res 而非 req，req.close 在请求体读完就触发是假阳性）
     let clientGone = false;
-    req.on('close', () => {
-        if (!res.writableEnded) {
+    res.on('close', () => {
+        if (!res.writableFinished) {
             clientGone = true;
-            console.log(`[SSE] ⚠ 客户端在 ${Date.now() - reqStartMs}ms 时断开连接`);
+            console.log(`[SSE] ⚠ 客户端在 ${Date.now() - reqStartMs}ms 时断开连接（响应未完成）`);
         }
     });
 
