@@ -302,7 +302,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         const meta = parseMeta(target.meta);
 
         if (meta && meta.destination) {
-            sendAnswer(res, messageId, agentId, `识别成功: ${target.name}，正在启动导航到 ${meta.destination}...`);
+            // 这是一条完整文本，不是增量流，需标记 is_finish=true，客户端才会稳定展示
+            sendAnswer(res, messageId, agentId, `识别成功: ${target.name}，正在启动导航到 ${meta.destination}...`, true);
 
             sendToolCall(res, messageId, agentId, {
                 command: 'take_navigation',
