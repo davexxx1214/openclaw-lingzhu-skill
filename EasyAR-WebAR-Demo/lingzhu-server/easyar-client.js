@@ -8,16 +8,17 @@ const http = require('http');
 const crypto = require('crypto');
 let sharp = null;
 try {
-    // 可选依赖：用于将 webp 转成 jpeg，提升 EasyAR 兼容性
     sharp = require('sharp');
 } catch (_) {
     // 未安装 sharp 时仍可运行，只是无法自动转码
 }
 
+// 持久连接池 —— 避免每次请求都做 TLS 握手（省 200-500ms）
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 10 });
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 10 });
+
 /**
- * 生成 EasyAR Cloud Recognition Token
- * 参考 EasyAR 文档，token = HMAC-SHA256(apiSecret, apiKey)
- * 如果本地 exe 可用，也可以通过 /webar/token 获取
+ * 从本地 EasyAR 服务获取 token
  */
 async function getTokenFromLocal(webarPort = 3000, expire = 86400) {
     return new Promise((resolve, reject) => {
@@ -49,11 +50,6 @@ async function getTokenFromLocal(webarPort = 3000, expire = 86400) {
 
 /**
  * 调用 EasyAR 云识别 API
- * @param {string} clientEndUrl - Client-end (Target Recognition) URL
- * @param {string} token - 认证 token
- * @param {string} crsAppId - CRS AppId
- * @param {string} imageBase64 - 图片 Base64 编码
- * @returns {Promise<object>} 识别结果
  */
 async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
     const url = new URL(`${clientEndUrl}/search`);
@@ -74,7 +70,7 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
                 'Content-Type': 'application/json;Charset=UTF-8',
                 'Authorization': token,
             },
-            // 允许自签名证书（开发用）
+            agent: httpsAgent,
             rejectUnauthorized: false,
         };
 
@@ -87,7 +83,7 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
                     if (json.statusCode === 0) {
                         resolve(json.result);
                     } else if (json.statusCode === 17) {
-                        resolve(null); // 未识别到目标
+                        resolve(null);
                     } else {
                         reject(new Error(`识别请求失败: ${JSON.stringify(json)}`));
                     }
@@ -104,8 +100,6 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
 
 /**
  * 解析识别结果中的 meta 字段（Base64 编码的 JSON）
- * @param {string} metaBase64 - Base64 编码的 meta 数据
- * @returns {object|null} 解析后的导航信息
  */
 function parseMeta(metaBase64) {
     if (!metaBase64) return null;
@@ -120,14 +114,12 @@ function parseMeta(metaBase64) {
 
 /**
  * 下载图片并转 Base64
- * @param {string} imageUrl - 图片 URL
- * @returns {Promise<string>} Base64 编码的图片
  */
 async function downloadImageAsBase64(imageUrl) {
     return new Promise((resolve, reject) => {
-        const protocol = imageUrl.startsWith('https') ? https : http;
-        protocol.get(imageUrl, { rejectUnauthorized: false }, (res) => {
-            // 处理重定向
+        const isHttps = imageUrl.startsWith('https');
+        const protocol = isHttps ? https : http;
+        protocol.get(imageUrl, { agent: isHttps ? httpsAgent : httpAgent, rejectUnauthorized: false }, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return downloadImageAsBase64(res.headers.location).then(resolve).catch(reject);
             }
@@ -144,7 +136,6 @@ async function downloadImageAsBase64(imageUrl) {
                     const contentType = (res.headers['content-type'] || '').toLowerCase();
                     console.log(`[图片] 下载完成: content-type=${contentType || '(unknown)'}, bytes=${buffer.length}`);
 
-                    // 所有图片统一缩放+压缩为 jpeg，减小 base64 体积加速 EasyAR API 调用
                     if (sharp) {
                         buffer = await sharp(buffer)
                             .resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true })
