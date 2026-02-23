@@ -359,8 +359,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             const msg = e.message.includes('token') || e.message.includes('Token')
                 ? `EasyAR 服务连接失败: ${e.message}`
                 : `图片处理失败: ${e.message}`;
-            sendAnswer(res, messageId, agentId, msg);
-            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+            sendAnswer(res, messageId, agentId, msg, true);
             sendSSEDone(res, messageId, agentId);
             return;
         }
@@ -386,11 +385,10 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             const isTimeout = e.message.includes('超时');
             const msg = isTimeout
-                ? '识别超时，请重新拍照再试。'
+                ? '识别超时，请说"拍照"重试。'
                 : `识别请求失败: ${e.message}`;
             console.log(`[计时] EasyAR失败: ${Date.now() - reqStartMs}ms (${isTimeout ? '超时' : '错误'})`);
-            sendAnswer(res, messageId, agentId, msg);
-            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+            sendAnswer(res, messageId, agentId, msg, true);
             sendSSEDone(res, messageId, agentId);
             return;
         }
@@ -399,19 +397,20 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
 
         // 4. 处理识别结果
+        // 注意：Rokid 眼镜不支持在图片上下文中触发 take_photo，
+        // 识别失败只能返回文字提示，由用户手动说话触发重拍。
         if (!result || !result.target) {
             const retries = incrementRetry(userId);
             const remaining = LINGZHU_MAX_RETRIES - retries;
             console.log(`[重试] 用户 ${userId} 连续失败 ${retries}/${LINGZHU_MAX_RETRIES} 次`);
 
             if (remaining > 0) {
-                sendAnswer(res, messageId, agentId, `未识别到匹配的目标，请对准标识物重新拍照。(剩余${remaining}次机会)`);
-                sendToolCall(res, messageId, agentId, {
-                    command: 'take_photo',
-                });
+                sendAnswer(res, messageId, agentId,
+                    `未识别到匹配的目标，请对准标识物后说"拍照"重试。(剩余${remaining}次)`, true);
             } else {
                 resetRetry(userId);
-                sendAnswer(res, messageId, agentId, '多次识别未成功，请确认标识物是否正确后重新唤起助手再试。');
+                sendAnswer(res, messageId, agentId,
+                    '多次识别未成功，请确认标识物是否正确后重新唤起助手再试。', true);
             }
             sendSSEDone(res, messageId, agentId);
             console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (未识别)`);
@@ -436,8 +435,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             const info = meta
                 ? `识别到: ${target.name}\n详细信息: ${JSON.stringify(meta, null, 2)}`
                 : `识别到: ${target.name}`;
-            sendAnswer(res, messageId, agentId, info);
-            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+            sendAnswer(res, messageId, agentId, info, true);
         }
 
         sendSSEDone(res, messageId, agentId);
@@ -448,8 +446,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         console.error('[错误]', e);
         try {
             if (!clientGone) {
-                sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`);
-                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+                sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`, true);
                 sendSSEDone(res, messageId, agentId);
             }
         } catch (_) {
