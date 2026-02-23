@@ -65,17 +65,47 @@ async function ensureToken() {
 }
 
 // ─── SSE 响应工具函数（遵循灵珠平台协议） ─────────────────────
+//
+// 输出格式（官方示例）:
+//   event:message
+//   data:{"role":"agent","type":"answer","answer_stream":"hello","message_id":"xxx","is_finish":false}
 
 function sendSSE(res, data) {
     const json = JSON.stringify(data);
-    console.log(`[SSE 发送] event:message | data:${json}`);
+    console.log(`[SSE] >> event:message data:${json}`);
     res.write(`event:message\ndata:${json}\n\n`);
 }
 
 function sendSSEDone(res) {
-    console.log('[SSE 发送] event:done | data:[DONE]');
+    console.log('[SSE] >> event:done');
     res.write(`event:done\ndata:[DONE]\n\n`);
     res.end();
+}
+
+function streamAnswer(res, messageId, agentId, text) {
+    return new Promise((resolve) => {
+        // 先发内容（is_finish=false）
+        sendSSE(res, {
+            role: 'agent',
+            type: 'answer',
+            answer_stream: text,
+            message_id: messageId,
+            agent_id: agentId,
+            is_finish: false,
+        });
+        // 短暂延迟后发结束标记（is_finish=true）
+        setTimeout(() => {
+            sendSSE(res, {
+                role: 'agent',
+                type: 'answer',
+                answer_stream: '',
+                message_id: messageId,
+                agent_id: agentId,
+                is_finish: true,
+            });
+            resolve();
+        }, 50);
+    });
 }
 
 function sendAnswer(res, messageId, agentId, text, isFinish = false) {
@@ -190,7 +220,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         // 如果没有图片，返回文字提示
         if (!imageUrl) {
-            sendAnswer(res, messageId, agentId, '请拍照后发送图片，我会识别并导航到对应地点。', true);
+            await streamAnswer(res, messageId, agentId, '请拍照后发送图片，我会识别并导航到对应地点。');
             sendSSEDone(res);
             return;
         }
