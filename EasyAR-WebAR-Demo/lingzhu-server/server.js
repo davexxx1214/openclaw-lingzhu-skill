@@ -42,7 +42,7 @@ const LINGZHU_AUTH_AK = lingzhuConfig.authAk || crypto.randomUUID();
 const LINGZHU_FORCE_TAKE_PHOTO = lingzhuConfig.forceTakePhoto === true;
 const LINGZHU_MAX_RETRIES = parseInt(lingzhuConfig.maxRetries, 10) || 3;
 // Rokid 眼镜端超时约 3-4 秒，留 500ms 余量给响应发送
-const GLASSES_TIMEOUT_MS = parseInt(lingzhuConfig.glassesTimeoutMs, 10) || 3500;
+const GLASSES_TIMEOUT_MS = parseInt(lingzhuConfig.glassesTimeoutMs, 10) || 2800;
 
 // ─── 用户重试计数（按 user_id 跟踪连续识别失败次数） ──────────
 
