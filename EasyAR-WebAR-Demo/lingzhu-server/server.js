@@ -8,10 +8,11 @@
  */
 
 const express = require('express');
+const https = require('https');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { recognize, parseMeta, downloadImageAsBase64, getTokenFromLocal } = require('./easyar-client');
+const { recognize, parseMeta, downloadImageAsBase64, getTokenFromLocal, _httpsAgent } = require('./easyar-client');
 
 // ─── 配置加载 ──────────────────────────────────────────────────
 
@@ -477,9 +478,8 @@ app.listen(LINGZHU_PORT, '0.0.0.0', () => {
     });
 
     // 预热 Rokid CDN 连接（basecloud.rokidcdn.com），减少首次图片下载的 TLS 握手耗时
-    const { _httpsAgent: cdnAgent } = require('./easyar-client');
     https.get('https://basecloud.rokidcdn.com/', {
-        agent: cdnAgent,
+        agent: _httpsAgent,
         rejectUnauthorized: false,
     }, (cdnRes) => {
         cdnRes.resume();
