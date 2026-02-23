@@ -78,10 +78,19 @@ function sendSSE(res, data) {
     res.write(`event:message\ndata:${json}\n\n`);
 }
 
-function sendSSEDone(res) {
-    // done 使用 [DONE]，兼容常见 SSE 客户端实现
-    console.log('[SSE] >> event:done data:[DONE]');
-    res.write('event:done\ndata:[DONE]\n\n');
+function sendSSEDone(res, messageId, agentId) {
+    // Rokid 客户端对 [DONE] 兼容较差，这里使用 JSON done 事件
+    const doneData = {
+        role: 'agent',
+        type: 'answer',
+        answer_stream: '',
+        message_id: messageId,
+        agent_id: agentId,
+        is_finish: true,
+    };
+    const json = JSON.stringify(doneData);
+    console.log(`[SSE] >> event:done data:${json}`);
+    res.write(`event:done\ndata:${json}\n\n`);
     res.end();
 }
 
@@ -246,7 +255,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 sendToolCall(res, messageId, agentId, {
                     command: 'take_photo',
                 });
-                sendSSEDone(res);
+                sendSSEDone(res, messageId, agentId);
                 return;
             }
 
@@ -255,12 +264,12 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 sendToolCall(res, messageId, agentId, {
                     command: 'take_photo',
                 });
-                sendSSEDone(res);
+                sendSSEDone(res, messageId, agentId);
                 return;
             }
 
             await streamAnswer(res, messageId, agentId, '请拍照后发送图片，我会识别并导航到对应地点。');
-            sendSSEDone(res);
+            sendSSEDone(res, messageId, agentId);
             return;
         }
 
@@ -271,7 +280,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             imageBase64 = await downloadImageAsBase64(imageUrl);
         } catch (e) {
             sendAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`, true);
-            sendSSEDone(res);
+            sendSSEDone(res, messageId, agentId);
             return;
         }
 
@@ -281,7 +290,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             tokenResult = await ensureToken();
         } catch (e) {
             sendAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`, true);
-            sendSSEDone(res);
+            sendSSEDone(res, messageId, agentId);
             return;
         }
 
@@ -297,7 +306,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             );
         } catch (e) {
             sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`, true);
-            sendSSEDone(res);
+            sendSSEDone(res, messageId, agentId);
             return;
         }
 
@@ -305,7 +314,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         if (!result || !result.target) {
             // 识图失败时发送单条最终消息，避免客户端丢弃流式中间态
             sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。', true);
-            sendSSEDone(res);
+            sendSSEDone(res, messageId, agentId);
             return;
         }
 
@@ -342,13 +351,13 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             }
         }
 
-        sendSSEDone(res);
+        sendSSEDone(res, messageId, agentId);
 
     } catch (e) {
         console.error('[错误]', e);
         try {
             sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`, true);
-            sendSSEDone(res);
+            sendSSEDone(res, messageId, agentId);
         } catch (_) {
             // 连接可能已断开
         }
