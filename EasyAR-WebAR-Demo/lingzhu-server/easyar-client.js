@@ -8,11 +8,14 @@ const http = require('http');
 const crypto = require('crypto');
 let sharp = null;
 try {
-    // 可选依赖：用于将 webp 转成 jpeg，提升 EasyAR 兼容性
     sharp = require('sharp');
 } catch (_) {
     // 未安装 sharp 时仍可运行，只是无法自动转码
 }
+
+// 持久连接池 —— 避免每次请求都做 TLS 握手（省 200-500ms）
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 10 });
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 10 });
 
 /**
  * 生成 EasyAR Cloud Recognition Token
@@ -74,7 +77,7 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
                 'Content-Type': 'application/json;Charset=UTF-8',
                 'Authorization': token,
             },
-            // 允许自签名证书（开发用）
+            agent: httpsAgent,
             rejectUnauthorized: false,
         };
 
@@ -125,8 +128,9 @@ function parseMeta(metaBase64) {
  */
 async function downloadImageAsBase64(imageUrl) {
     return new Promise((resolve, reject) => {
-        const protocol = imageUrl.startsWith('https') ? https : http;
-        protocol.get(imageUrl, { rejectUnauthorized: false }, (res) => {
+        const isHttps = imageUrl.startsWith('https');
+        const protocol = isHttps ? https : http;
+        protocol.get(imageUrl, { agent: isHttps ? httpsAgent : httpAgent, rejectUnauthorized: false }, (res) => {
             // 处理重定向
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return downloadImageAsBase64(res.headers.location).then(resolve).catch(reject);
@@ -145,12 +149,11 @@ async function downloadImageAsBase64(imageUrl) {
                     console.log(`[图片] 下载完成: content-type=${contentType || '(unknown)'}, bytes=${buffer.length}`);
 
                     if (sharp) {
-                        // 统一转 jpeg + 限制尺寸，减少 base64 体积和 EasyAR API 耗时
                         buffer = await sharp(buffer)
-                            .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
-                            .jpeg({ quality: 75 })
+                            .resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true })
+                            .jpeg({ quality: 60 })
                             .toBuffer();
-                        console.log(`[图片] 转码+缩放完成 (jpeg q75 max1024), bytes=${buffer.length}`);
+                        console.log(`[图片] 转码+缩放完成 (jpeg q60 max800), bytes=${buffer.length}`);
                     } else if (contentType.includes('image/webp')) {
                         console.warn('[图片] 当前是 webp，且未安装 sharp，可能导致 EasyAR 识别失败');
                     }
