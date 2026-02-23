@@ -264,7 +264,10 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // 1. 下载图片并转 Base64
+        // 1. 先发送处理中状态，避免客户端在长耗时识别阶段提前退出
+        sendAnswer(res, messageId, agentId, '正在识别图片...', false);
+
+        // 2. 下载图片并转 Base64
         console.log(`[识别] 下载图片: ${imageUrl}`);
         let imageBase64;
         try {
@@ -276,7 +279,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // 2. 获取 token
+        // 3. 获取 token
         let tokenResult;
         try {
             tokenResult = await ensureToken();
@@ -287,7 +290,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // 3. 调用 EasyAR 云识别
+        // 4. 调用 EasyAR 云识别
         console.log('[识别] 调用 EasyAR 云识别...');
         let result;
         try {
@@ -304,7 +307,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // 4. 处理识别结果
+        // 5. 处理识别结果
         if (!result || !result.target) {
             // 用户要求：识图失败时也要把提示发到眼镜端
             await streamAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。');
