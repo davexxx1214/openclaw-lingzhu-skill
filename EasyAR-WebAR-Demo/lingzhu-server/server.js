@@ -266,29 +266,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         }
     });
 
-    // 心跳定时器 —— 使用 SSE 注释保持连接，不干扰 Rokid 平台的 answer 渲染
-    let keepAliveTimer = null;
-    function startKeepAlive() {
-        keepAliveTimer = setInterval(() => {
-            if (clientGone || res.writableEnded) {
-                clearInterval(keepAliveTimer);
-                return;
-            }
-            try {
-                res.write(`: heartbeat ${Date.now()}\n\n`);
-                console.log(`[SSE] >> heartbeat (${Date.now() - reqStartMs}ms)`);
-            } catch (_) {
-                clearInterval(keepAliveTimer);
-            }
-        }, 1500);
-    }
-    function stopKeepAlive() {
-        if (keepAliveTimer) {
-            clearInterval(keepAliveTimer);
-            keepAliveTimer = null;
-        }
-    }
-
     try {
         // 提取图片和文本
         const messages = message || [];
@@ -331,11 +308,9 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // ── 图片处理分支 —— Rokid 平台约 2s 超时，必须尽快完成 ──
-
-        // 立即发送第一条数据
-        sendAnswer(res, messageId, agentId, '正在识别图片，请稍候...');
-        startKeepAlive();
+        // ── 图片处理分支 ──
+        // 不发送中间消息：Rokid 平台收到第一条 answer 后会启动短超时，
+        // 导致后续结果被丢弃。保持静默直到结果就绪再一次性发送。
 
         // 1+2. 图片下载 和 token 获取 **并行** 执行（节省 ~1s）
         console.log(`[识别] 下载图片: ${imageUrl}`);
@@ -354,7 +329,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             imageBase64 = imgResult;
             tokenResult = tkResult;
         } catch (e) {
-            stopKeepAlive();
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             const msg = e.message.includes('token') || e.message.includes('Token')
                 ? `EasyAR 服务连接失败: ${e.message}`
@@ -364,7 +338,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        if (clientGone) { stopKeepAlive(); console.log('[SSE] 客户端已断开, 跳过识别'); return; }
+        if (clientGone) { console.log('[SSE] 客户端已断开, 跳过识别'); return; }
 
         // 3. 调用 EasyAR 云识别（动态超时：总预算 - 已用时间）
         const elapsed = Date.now() - reqStartMs;
@@ -381,7 +355,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             );
             console.log(`[计时] EasyAR识别: ${Date.now() - reqStartMs}ms`);
         } catch (e) {
-            stopKeepAlive();
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             const isTimeout = e.message.includes('超时');
             const msg = isTimeout
@@ -393,7 +366,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        stopKeepAlive();
         if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
 
         // 4. 处理识别结果
@@ -442,7 +414,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (完成)`);
 
     } catch (e) {
-        stopKeepAlive();
         console.error('[错误]', e);
         try {
             if (!clientGone) {
