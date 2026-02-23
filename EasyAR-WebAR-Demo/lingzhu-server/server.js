@@ -40,7 +40,32 @@ const WEBAR_PORT = parseInt((config.web?.port || ':3000').replace(':', ''), 10);
 const LINGZHU_PORT = lingzhuConfig.port || 18789;
 const LINGZHU_AUTH_AK = lingzhuConfig.authAk || crypto.randomUUID();
 const LINGZHU_FORCE_TAKE_PHOTO = lingzhuConfig.forceTakePhoto === true;
-const LINGZHU_IMAGE_ONLY = lingzhuConfig.imageOnly === true;
+const LINGZHU_MAX_RETRIES = parseInt(lingzhuConfig.maxRetries, 10) || 3;
+
+// ─── 用户重试计数（按 user_id 跟踪连续识别失败次数） ──────────
+
+const retryCountMap = new Map();
+const RETRY_EXPIRE_MS = 5 * 60 * 1000;
+
+function getRetryCount(userId) {
+    const entry = retryCountMap.get(userId);
+    if (!entry) return 0;
+    if (Date.now() - entry.ts > RETRY_EXPIRE_MS) {
+        retryCountMap.delete(userId);
+        return 0;
+    }
+    return entry.count;
+}
+
+function incrementRetry(userId) {
+    const count = getRetryCount(userId) + 1;
+    retryCountMap.set(userId, { count, ts: Date.now() });
+    return count;
+}
+
+function resetRetry(userId) {
+    retryCountMap.delete(userId);
+}
 
 // ─── Token 缓存 ────────────────────────────────────────────────
 
@@ -209,9 +234,10 @@ app.get('/health', (req, res) => {
 app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
     console.log('[SSE] 收到灵珠请求, body:', JSON.stringify(req.body, null, 2));
 
-    const { message_id, agent_id, message, metadata } = req.body;
+    const { message_id, agent_id, message, metadata, user_id } = req.body;
     const messageId = message_id || crypto.randomUUID();
     const agentId = agent_id || 'easyar-navi';
+    const userId = user_id || 'anonymous';
     const reqStartMs = Date.now();
 
     // 设置 SSE 响应头
@@ -288,14 +314,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         // 无图片分支 —— 快速响应，不需要心跳
         if (!imageUrl) {
-            if (LINGZHU_IMAGE_ONLY) {
-                sendToolCall(res, messageId, agentId, {
-                    command: 'take_photo',
-                });
-                sendSSEDone(res, messageId, agentId);
-                return;
-            }
-
+            resetRetry(userId);
             if (LINGZHU_FORCE_TAKE_PHOTO || /拍照|拍一下|识别|扫一扫|看看/.test(textForIntent)) {
                 sendAnswer(res, messageId, agentId, '收到，正在为你打开拍照识别。');
                 sendToolCall(res, messageId, agentId, {
@@ -372,15 +391,25 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         // 4. 处理识别结果
         if (!result || !result.target) {
-            sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。');
-            sendToolCall(res, messageId, agentId, {
-                command: 'take_photo',
-            });
+            const retries = incrementRetry(userId);
+            const remaining = LINGZHU_MAX_RETRIES - retries;
+            console.log(`[重试] 用户 ${userId} 连续失败 ${retries}/${LINGZHU_MAX_RETRIES} 次`);
+
+            if (remaining > 0) {
+                sendAnswer(res, messageId, agentId, `未识别到匹配的目标，请对准标识物重新拍照。(剩余${remaining}次机会)`);
+                sendToolCall(res, messageId, agentId, {
+                    command: 'take_photo',
+                });
+            } else {
+                resetRetry(userId);
+                sendAnswer(res, messageId, agentId, '多次识别未成功，请确认标识物是否正确后重新唤起助手再试。');
+            }
             sendSSEDone(res, messageId, agentId);
             console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (未识别)`);
             return;
         }
 
+        resetRetry(userId);
         const target = result.target;
         console.log(`[识别] 识别到目标: ${target.name} (ID: ${target.targetId})`);
 
@@ -395,17 +424,11 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 navi_type: meta.navi_type || '1',
             });
         } else {
-            if (LINGZHU_IMAGE_ONLY) {
-                sendToolCall(res, messageId, agentId, {
-                    command: 'take_photo',
-                });
-            } else {
-                const info = meta
-                    ? `识别到: ${target.name}\n详细信息: ${JSON.stringify(meta, null, 2)}`
-                    : `识别到: ${target.name}`;
-                sendAnswer(res, messageId, agentId, info);
-                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
-            }
+            const info = meta
+                ? `识别到: ${target.name}\n详细信息: ${JSON.stringify(meta, null, 2)}`
+                : `识别到: ${target.name}`;
+            sendAnswer(res, messageId, agentId, info);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
         }
 
         sendSSEDone(res, messageId, agentId);
@@ -460,7 +483,8 @@ app.listen(LINGZHU_PORT, '0.0.0.0', () => {
     console.log(`║  本机 IP:   ${localIP}`.padEnd(72) + '║');
     console.log(`║  SSE 端点:  ${ssePathLocal}`.padEnd(72) + '║');
     console.log(`║  鉴权 AK:   ${LINGZHU_AUTH_AK}`.padEnd(72) + '║');
-    console.log(`║  图片模式:  ${LINGZHU_IMAGE_ONLY ? '开启(仅图片流程)' : '关闭(支持文字回复)'}`.padEnd(72) + '║');
+    console.log(`║  强制拍照:  ${LINGZHU_FORCE_TAKE_PHOTO ? '开启' : '关闭'}`.padEnd(72) + '║');
+    console.log(`║  最大重试:  ${LINGZHU_MAX_RETRIES} 次`.padEnd(72) + '║');
     console.log(`║  EasyAR:    ${EASYAR_CLIENT_END_URL || '(未配置)'}`.padEnd(72) + '║');
     console.log('╠═══════════════════════════════════════════════════════════════════════╣');
     console.log('║  提交到灵珠平台:                                                      ║');
