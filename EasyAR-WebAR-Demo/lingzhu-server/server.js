@@ -249,20 +249,40 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
     }
 });
 
+// ─── 获取本机 IP ────────────────────────────────────────────────
+
+function getLocalIP() {
+    const os = require('os');
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+        for (const net of nets[name]) {
+            if (net.family === 'IPv4' && !net.internal) {
+                return net.address;
+            }
+        }
+    }
+    return '0.0.0.0';
+}
+
 // ─── 启动服务 ──────────────────────────────────────────────────
 
-app.listen(LINGZHU_PORT, () => {
+app.listen(LINGZHU_PORT, '0.0.0.0', () => {
+    const localIP = getLocalIP();
+    const ssePathLocal = `http://${localIP}:${LINGZHU_PORT}/metis/agent/api/sse`;
     console.log('');
     console.log('╔═══════════════════════════════════════════════════════════════════════╗');
     console.log('║             EasyAR + 灵珠 AR 导航服务 已启动                          ║');
     console.log('╠═══════════════════════════════════════════════════════════════════════╣');
-    console.log(`║  SSE 端点:  http://127.0.0.1:${LINGZHU_PORT}/metis/agent/api/sse`.padEnd(72) + '║');
+    console.log(`║  监听地址:  0.0.0.0:${LINGZHU_PORT}`.padEnd(72) + '║');
+    console.log(`║  本机 IP:   ${localIP}`.padEnd(72) + '║');
+    console.log(`║  SSE 端点:  ${ssePathLocal}`.padEnd(72) + '║');
     console.log(`║  鉴权 AK:   ${LINGZHU_AUTH_AK}`.padEnd(72) + '║');
     console.log(`║  EasyAR:    ${EASYAR_CLIENT_END_URL || '(未配置)'}`.padEnd(72) + '║');
     console.log('╠═══════════════════════════════════════════════════════════════════════╣');
     console.log('║  提交到灵珠平台:                                                      ║');
-    console.log(`║    SSE 接口: http://<公网IP>:${LINGZHU_PORT}/metis/agent/api/sse`.padEnd(72) + '║');
+    console.log(`║    SSE 接口: ${ssePathLocal}`.padEnd(72) + '║');
     console.log(`║    鉴权 AK:  ${LINGZHU_AUTH_AK}`.padEnd(72) + '║');
+    console.log('║  (若服务器有独立公网 IP，上面显示的 IP 即可直接使用)'.padEnd(68) + '║');
     console.log('╚═══════════════════════════════════════════════════════════════════════╝');
     console.log('');
 });
