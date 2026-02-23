@@ -211,16 +211,37 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         let userText = '';
 
         for (const msg of messages) {
-            if (msg.type === 'image' && msg.image_url) {
-                imageUrl = msg.image_url;
+            if (msg.type === 'image') {
+                // 兼容不同平台的图片字段命名：image_url / text(url) / url
+                const candidate = msg.image_url || msg.text || msg.url;
+                if (candidate) {
+                    imageUrl = candidate;
+                }
             }
-            if (msg.type === 'text' && msg.text) {
-                userText += msg.text + ' ';
+            if (msg.type === 'text') {
+                if (msg.text) userText += msg.text + ' ';
+                // 少数实现会把图片 URL 塞在 text 消息里
+                if (!imageUrl && typeof msg.image_url === 'string' && msg.image_url.trim()) {
+                    imageUrl = msg.image_url.trim();
+                }
             }
         }
 
-        // 如果没有图片，返回文字提示
+        console.log(`[SSE] 提取结果: userText="${userText.trim()}", imageUrl=${imageUrl || '(无)'}`);
+
+        const textForIntent = (userText || '').trim();
+
+        // 如果没有图片，优先尝试通过 tool_call 触发拍照，避免用户说“拍照”时退出智能体
         if (!imageUrl) {
+            if (/拍照|拍一下|识别|扫一扫|看看/.test(textForIntent)) {
+                sendAnswer(res, messageId, agentId, '收到，正在为你打开拍照识别。');
+                sendToolCall(res, messageId, agentId, {
+                    command: 'take_photo',
+                });
+                sendSSEDone(res);
+                return;
+            }
+
             await streamAnswer(res, messageId, agentId, '请拍照后发送图片，我会识别并导航到对应地点。');
             sendSSEDone(res);
             return;
