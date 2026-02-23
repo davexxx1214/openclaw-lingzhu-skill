@@ -77,8 +77,9 @@ function sendSSE(res, data) {
 }
 
 function sendSSEDone(res) {
-    console.log('[SSE] >> event:done');
-    res.write(`event:done\ndata:[DONE]\n\n`);
+    // 部分客户端会把 done 事件按 JSON 解析，发送 [DONE] 可能触发协议异常。
+    // 这里直接结束连接，由 is_finish=true 的 message 事件表示完成。
+    console.log('[SSE] >> close stream');
     res.end();
 }
 
@@ -98,7 +99,7 @@ function streamAnswer(res, messageId, agentId, text) {
             sendSSE(res, {
                 role: 'agent',
                 type: 'answer',
-                answer_stream: '',
+                answer_stream: text,
                 message_id: messageId,
                 agent_id: agentId,
                 is_finish: true,
