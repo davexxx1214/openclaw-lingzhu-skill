@@ -160,13 +160,15 @@ app.use((req, res, next) => {
     next();
 });
 
-// 请求日志中间件 —— 所有请求都会打印
+// 请求日志中间件 —— 所有请求都会打印（含实际响应时间）
 app.use((req, res, next) => {
-    const ts = new Date().toISOString();
-    console.log(`[${ts}] --> ${req.method} ${req.url} from ${req.ip}`);
-    console.log(`[${ts}]     Headers: ${JSON.stringify(req.headers)}`);
+    const startTs = new Date().toISOString();
+    const startMs = Date.now();
+    console.log(`[${startTs}] --> ${req.method} ${req.url} from ${req.ip}`);
+    console.log(`[${startTs}]     Headers: ${JSON.stringify(req.headers)}`);
     res.on('finish', () => {
-        console.log(`[${ts}] <-- ${req.method} ${req.url} ${res.statusCode}`);
+        const endTs = new Date().toISOString();
+        console.log(`[${endTs}] <-- ${req.method} ${req.url} ${res.statusCode} (${Date.now() - startMs}ms)`);
     });
     next();
 });
@@ -210,6 +212,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
     const { message_id, agent_id, message, metadata } = req.body;
     const messageId = message_id || crypto.randomUUID();
     const agentId = agent_id || 'easyar-navi';
+    const reqStartMs = Date.now();
 
     // 设置 SSE 响应头
     res.writeHead(200, {
@@ -221,6 +224,42 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
     if (typeof res.flushHeaders === 'function') {
         res.flushHeaders();
     }
+    // 禁用 Nagle 算法，确保 SSE 数据立即推送
+    if (res.socket) {
+        res.socket.setNoDelay(true);
+    }
+
+    // 客户端断开检测
+    let clientGone = false;
+    req.on('close', () => {
+        if (!res.writableEnded) {
+            clientGone = true;
+            console.log(`[SSE] ⚠ 客户端在 ${Date.now() - reqStartMs}ms 时断开连接`);
+        }
+    });
+
+    // 心跳定时器（在长耗时处理期间保持连接活跃）
+    let keepAliveTimer = null;
+    function startKeepAlive() {
+        keepAliveTimer = setInterval(() => {
+            if (clientGone || res.writableEnded) {
+                clearInterval(keepAliveTimer);
+                return;
+            }
+            try {
+                res.write(`: heartbeat ${Date.now()}\n\n`);
+                console.log(`[SSE] >> heartbeat (${Date.now() - reqStartMs}ms)`);
+            } catch (_) {
+                clearInterval(keepAliveTimer);
+            }
+        }, 1500);
+    }
+    function stopKeepAlive() {
+        if (keepAliveTimer) {
+            clearInterval(keepAliveTimer);
+            keepAliveTimer = null;
+        }
+    }
 
     try {
         // 提取图片和文本
@@ -230,7 +269,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         for (const msg of messages) {
             if (msg.type === 'image') {
-                // 兼容不同平台的图片字段命名：image_url / text(url) / url
                 const candidate = msg.image_url || msg.text || msg.url;
                 if (candidate) {
                     imageUrl = candidate;
@@ -238,7 +276,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             }
             if (msg.type === 'text') {
                 if (msg.text) userText += msg.text + ' ';
-                // 少数实现会把图片 URL 塞在 text 消息里
                 if (!imageUrl && typeof msg.image_url === 'string' && msg.image_url.trim()) {
                     imageUrl = msg.image_url.trim();
                 }
@@ -249,7 +286,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         const textForIntent = (userText || '').trim();
 
-        // 图片模式：无图时直接触发拍照，不返回文字
+        // 无图片分支 —— 快速响应，不需要心跳
         if (!imageUrl) {
             if (LINGZHU_IMAGE_ONLY) {
                 sendToolCall(res, messageId, agentId, {
@@ -273,12 +310,21 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
+        // ── 图片处理分支 —— 耗时操作，需要保活 ──
+
+        // 立即发送第一条数据，防止客户端因空闲超时断开
+        sendAnswer(res, messageId, agentId, '正在识别图片，请稍候...');
+        startKeepAlive();
+
         // 1. 下载图片并转 Base64
         console.log(`[识别] 下载图片: ${imageUrl}`);
         let imageBase64;
         try {
             imageBase64 = await downloadImageAsBase64(imageUrl);
+            console.log(`[计时] 图片下载+转码: ${Date.now() - reqStartMs}ms`);
         } catch (e) {
+            stopKeepAlive();
+            if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             sendAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`);
             sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
@@ -289,12 +335,17 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         let tokenResult;
         try {
             tokenResult = await ensureToken();
+            console.log(`[计时] 获取token: ${Date.now() - reqStartMs}ms`);
         } catch (e) {
+            stopKeepAlive();
+            if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             sendAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`);
             sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
         }
+
+        if (clientGone) { stopKeepAlive(); console.log('[SSE] 客户端已断开, 跳过识别'); return; }
 
         // 3. 调用 EasyAR 云识别
         console.log('[识别] 调用 EasyAR 云识别...');
@@ -306,38 +357,37 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 tokenResult.crsAppId || EASYAR_CRS_APPID,
                 imageBase64
             );
+            console.log(`[计时] EasyAR识别: ${Date.now() - reqStartMs}ms`);
         } catch (e) {
+            stopKeepAlive();
+            if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`);
             sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
         }
 
+        stopKeepAlive();
+        if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
+
         // 4. 处理识别结果
         if (!result || !result.target) {
-            // Rokid 客户端在有 tool_call 跟随时才稳定渲染 answer 文本
             sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。');
             sendToolCall(res, messageId, agentId, {
                 command: 'take_photo',
             });
             sendSSEDone(res, messageId, agentId);
+            console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (未识别)`);
             return;
         }
 
         const target = result.target;
         console.log(`[识别] 识别到目标: ${target.name} (ID: ${target.targetId})`);
 
-        // 6. 解析 meta 中的导航信息
         const meta = parseMeta(target.meta);
 
         if (meta && meta.destination) {
-            if (!LINGZHU_IMAGE_ONLY) {
-                // 这是一条完整文本，不是增量流，需标记 is_finish=true，客户端才会稳定展示
-                sendAnswer(res, messageId, agentId, `识别成功: ${target.name}，正在启动导航到 ${meta.destination}...`, true);
-                // 给客户端一点渲染窗口，避免文本被紧随其后的 tool_call 覆盖
-                await sleep(120);
-            }
-
+            sendAnswer(res, messageId, agentId, `识别成功: ${target.name}，正在启动导航到 ${meta.destination}...`);
             sendToolCall(res, messageId, agentId, {
                 command: 'take_navigation',
                 action: 'open',
@@ -353,18 +403,23 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 const info = meta
                     ? `识别到: ${target.name}\n详细信息: ${JSON.stringify(meta, null, 2)}`
                     : `识别到: ${target.name}`;
-                sendAnswer(res, messageId, agentId, info, true);
+                sendAnswer(res, messageId, agentId, info);
+                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             }
         }
 
         sendSSEDone(res, messageId, agentId);
+        console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (完成)`);
 
     } catch (e) {
+        stopKeepAlive();
         console.error('[错误]', e);
         try {
-            sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`);
-            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
-            sendSSEDone(res, messageId, agentId);
+            if (!clientGone) {
+                sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`);
+                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+                sendSSEDone(res, messageId, agentId);
+            }
         } catch (_) {
             // 连接可能已断开
         }
