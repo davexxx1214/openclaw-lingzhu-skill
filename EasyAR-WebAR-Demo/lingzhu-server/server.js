@@ -64,39 +64,38 @@ async function ensureToken() {
     }
 }
 
-// ─── SSE 响应工具函数 ──────────────────────────────────────────
+// ─── SSE 响应工具函数（遵循灵珠平台协议） ─────────────────────
 
 function sendSSE(res, data) {
-    res.write(`event:message\ndata:${JSON.stringify(data)}\n\n`);
+    const json = JSON.stringify(data);
+    console.log(`[SSE 发送] event:message | data:${json}`);
+    res.write(`event:message\ndata:${json}\n\n`);
 }
 
 function sendSSEDone(res) {
+    console.log('[SSE 发送] event:done | data:[DONE]');
     res.write(`event:done\ndata:[DONE]\n\n`);
     res.end();
 }
 
-function sendAnswer(res, messageId, text, isFinish = false) {
+function sendAnswer(res, messageId, agentId, text, isFinish = false) {
     sendSSE(res, {
         role: 'agent',
         type: 'answer',
         answer_stream: text,
         message_id: messageId,
-        agent_id: 'easyar-navi',
+        agent_id: agentId,
         is_finish: isFinish,
     });
 }
 
-function sendToolCall(res, messageId, command, params) {
+function sendToolCall(res, messageId, agentId, toolCall) {
     sendSSE(res, {
         role: 'agent',
         type: 'tool_call',
-        tool_call: {
-            handling_required: true,
-            command: command,
-            params: params,
-        },
+        tool_call: toolCall,
         message_id: messageId,
-        agent_id: 'easyar-navi',
+        agent_id: agentId,
         is_finish: true,
     });
 }
@@ -104,6 +103,16 @@ function sendToolCall(res, messageId, command, params) {
 // ─── Express 应用 ──────────────────────────────────────────────
 
 const app = express();
+
+// URL 清理中间件 —— 去除路径末尾的 %20（空格）和多余斜杠
+app.use((req, res, next) => {
+    const cleaned = req.url.replace(/%20+$/g, '').replace(/\/+$/, '') || '/';
+    if (cleaned !== req.url) {
+        console.log(`[URL清理] "${req.url}" → "${cleaned}"`);
+        req.url = cleaned;
+    }
+    next();
+});
 
 // 请求日志中间件 —— 所有请求都会打印
 app.use((req, res, next) => {
@@ -152,15 +161,16 @@ app.get('/health', (req, res) => {
 app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
     console.log('[SSE] 收到灵珠请求, body:', JSON.stringify(req.body, null, 2));
 
-    const { message_id, message, metadata } = req.body;
+    const { message_id, agent_id, message, metadata } = req.body;
     const messageId = message_id || crypto.randomUUID();
+    const agentId = agent_id || 'easyar-navi';
 
     // 设置 SSE 响应头
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no', // nginx 代理时禁用缓冲
+        'X-Accel-Buffering': 'no',
     });
 
     try {
@@ -180,13 +190,13 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         // 如果没有图片，返回文字提示
         if (!imageUrl) {
-            sendAnswer(res, messageId, '请拍照后发送图片，我会识别并导航到对应地点。', true);
+            sendAnswer(res, messageId, agentId, '请拍照后发送图片，我会识别并导航到对应地点。', true);
             sendSSEDone(res);
             return;
         }
 
         // 1. 发送"正在识别"状态
-        sendAnswer(res, messageId, '📷 正在识别图片...');
+        sendAnswer(res, messageId, agentId, '正在识别图片...');
 
         // 2. 下载图片并转 Base64
         console.log(`[识别] 下载图片: ${imageUrl}`);
@@ -194,7 +204,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         try {
             imageBase64 = await downloadImageAsBase64(imageUrl);
         } catch (e) {
-            sendAnswer(res, messageId, `❌ 图片下载失败: ${e.message}`, true);
+            sendAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`, true);
             sendSSEDone(res);
             return;
         }
@@ -204,7 +214,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         try {
             tokenResult = await ensureToken();
         } catch (e) {
-            sendAnswer(res, messageId, `❌ EasyAR 服务连接失败: ${e.message}`, true);
+            sendAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`, true);
             sendSSEDone(res);
             return;
         }
@@ -220,14 +230,14 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 imageBase64
             );
         } catch (e) {
-            sendAnswer(res, messageId, `❌ 识别请求失败: ${e.message}`, true);
+            sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`, true);
             sendSSEDone(res);
             return;
         }
 
         // 5. 处理识别结果
         if (!result || !result.target) {
-            sendAnswer(res, messageId, '🔍 未识别到匹配的目标，请对准标识物重新拍照。', true);
+            sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。', true);
             sendSSEDone(res);
             return;
         }
@@ -239,19 +249,19 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         const meta = parseMeta(target.meta);
 
         if (meta && meta.destination) {
-            // 有导航信息，发送导航命令
-            sendAnswer(res, messageId, `✅ 识别成功: ${target.name}，正在启动导航到 ${meta.destination}...`);
+            sendAnswer(res, messageId, agentId, `识别成功: ${target.name}，正在启动导航到 ${meta.destination}...`);
 
-            sendToolCall(res, messageId, 'take_navigation', {
+            sendToolCall(res, messageId, agentId, {
+                command: 'take_navigation',
+                action: 'open',
                 poi_name: meta.destination,
-                navi_type: meta.navi_type || '1', // 默认步行
+                navi_type: meta.navi_type || '1',
             });
         } else {
-            // 没有导航信息，返回识别结果文本
             const info = meta
                 ? `识别到: ${target.name}\n详细信息: ${JSON.stringify(meta, null, 2)}`
                 : `识别到: ${target.name}`;
-            sendAnswer(res, messageId, `✅ ${info}`, true);
+            sendAnswer(res, messageId, agentId, info, true);
         }
 
         sendSSEDone(res);
@@ -259,7 +269,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
     } catch (e) {
         console.error('[错误]', e);
         try {
-            sendAnswer(res, messageId, `❌ 服务异常: ${e.message}`, true);
+            sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`, true);
             sendSSEDone(res);
         } catch (_) {
             // 连接可能已断开
