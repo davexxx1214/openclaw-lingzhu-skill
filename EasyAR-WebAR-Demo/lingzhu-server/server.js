@@ -41,6 +41,8 @@ const LINGZHU_PORT = lingzhuConfig.port || 18789;
 const LINGZHU_AUTH_AK = lingzhuConfig.authAk || crypto.randomUUID();
 const LINGZHU_FORCE_TAKE_PHOTO = lingzhuConfig.forceTakePhoto === true;
 const LINGZHU_MAX_RETRIES = parseInt(lingzhuConfig.maxRetries, 10) || 3;
+// Rokid 眼镜端超时约 3-4 秒，留 500ms 余量给响应发送
+const GLASSES_TIMEOUT_MS = parseInt(lingzhuConfig.glassesTimeoutMs, 10) || 3500;
 
 // ─── 用户重试计数（按 user_id 跟踪连续识别失败次数） ──────────
 
@@ -365,21 +367,29 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         if (clientGone) { stopKeepAlive(); console.log('[SSE] 客户端已断开, 跳过识别'); return; }
 
-        // 3. 调用 EasyAR 云识别
-        console.log('[识别] 调用 EasyAR 云识别...');
+        // 3. 调用 EasyAR 云识别（动态超时：总预算 - 已用时间）
+        const elapsed = Date.now() - reqStartMs;
+        const recognizeTimeout = Math.max(GLASSES_TIMEOUT_MS - elapsed - 200, 500);
+        console.log(`[识别] 调用 EasyAR 云识别... (超时: ${recognizeTimeout}ms)`);
         let result;
         try {
             result = await recognize(
                 EASYAR_CLIENT_END_URL,
                 tokenResult.token,
                 tokenResult.crsAppId || EASYAR_CRS_APPID,
-                imageBase64
+                imageBase64,
+                recognizeTimeout
             );
             console.log(`[计时] EasyAR识别: ${Date.now() - reqStartMs}ms`);
         } catch (e) {
             stopKeepAlive();
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
-            sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`);
+            const isTimeout = e.message.includes('超时');
+            const msg = isTimeout
+                ? '识别超时，请重新拍照再试。'
+                : `识别请求失败: ${e.message}`;
+            console.log(`[计时] EasyAR失败: ${Date.now() - reqStartMs}ms (${isTimeout ? '超时' : '错误'})`);
+            sendAnswer(res, messageId, agentId, msg);
             sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
@@ -493,10 +503,20 @@ app.listen(LINGZHU_PORT, '0.0.0.0', () => {
     console.log('╚═══════════════════════════════════════════════════════════════════════╝');
     console.log('');
 
-    // 预加载 EasyAR token，避免首次请求冷启动耗时
-    ensureToken().then(() => {
+    // 预加载 EasyAR token + 预热 HTTPS 连接池
+    ensureToken().then(async (tk) => {
         console.log('[启动] EasyAR token 预加载成功');
+        // 用一张 1x1 空白图发一次请求，建立 HTTPS 连接（DNS + TCP + TLS）
+        if (EASYAR_CLIENT_END_URL) {
+            try {
+                const dummyBase64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP///wAAAf/bAEMA//8A/9k=';
+                await recognize(EASYAR_CLIENT_END_URL, tk.token, tk.crsAppId || EASYAR_CRS_APPID, dummyBase64, 5000);
+            } catch (_) {
+                // 预热请求失败是正常的（空白图不会被识别），目的只是建立连接
+            }
+            console.log('[启动] EasyAR HTTPS 连接预热完成');
+        }
     }).catch((e) => {
-        console.warn(`[启动] EasyAR token 预加载失败: ${e.message}（首次请求时会重试）`);
+        console.warn(`[启动] EasyAR 预加载失败: ${e.message}（首次请求时会重试）`);
     });
 });

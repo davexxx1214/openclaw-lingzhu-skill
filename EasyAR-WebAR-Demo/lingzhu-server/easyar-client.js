@@ -58,7 +58,7 @@ async function getTokenFromLocal(webarPort = 3000, expire = 86400) {
  * @param {string} imageBase64 - 图片 Base64 编码
  * @returns {Promise<object>} 识别结果
  */
-async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
+async function recognize(clientEndUrl, token, crsAppId, imageBase64, timeoutMs = 0) {
     const url = new URL(`${clientEndUrl}/search`);
 
     const body = JSON.stringify({
@@ -68,6 +68,8 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
     });
 
     return new Promise((resolve, reject) => {
+        let timedOut = false;
+
         const options = {
             hostname: url.hostname,
             port: url.port || 8443,
@@ -85,12 +87,13 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
+                if (timedOut) return;
                 try {
                     const json = JSON.parse(data);
                     if (json.statusCode === 0) {
                         resolve(json.result);
                     } else if (json.statusCode === 17) {
-                        resolve(null); // 未识别到目标
+                        resolve(null);
                     } else {
                         reject(new Error(`识别请求失败: ${JSON.stringify(json)}`));
                     }
@@ -99,7 +102,16 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
                 }
             });
         });
-        req.on('error', reject);
+        req.on('error', (e) => { if (!timedOut) reject(e); });
+
+        if (timeoutMs > 0) {
+            req.setTimeout(timeoutMs, () => {
+                timedOut = true;
+                req.destroy();
+                reject(new Error(`识别超时(${timeoutMs}ms)`));
+            });
+        }
+
         req.write(body);
         req.end();
     });
