@@ -257,12 +257,12 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         res.socket.setNoDelay(true);
     }
 
-    // 客户端断开检测（必须监听 res 而非 req，req.close 只是请求体读完）
+    // 客户端断开检测
     let clientGone = false;
-    res.on('close', () => {
-        if (!res.writableFinished) {
+    req.on('close', () => {
+        if (!res.writableEnded) {
             clientGone = true;
-            console.log(`[SSE] ⚠ 客户端在 ${Date.now() - reqStartMs}ms 时断开连接（响应未完成）`);
+            console.log(`[SSE] ⚠ 客户端在 ${Date.now() - reqStartMs}ms 时断开连接`);
         }
     });
 
@@ -331,34 +331,36 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // ── 图片处理分支 ──
-        // 立即发送第一条数据 + 启动心跳，防止 Rokid 平台因空闲超时断开连接
+        // ── 图片处理分支 —— 耗时操作，需要保活 ──
+
+        // 立即发送第一条数据，防止客户端因空闲超时断开
         sendAnswer(res, messageId, agentId, '正在识别图片，请稍候...');
         startKeepAlive();
 
-        // 1+2. 图片下载 和 token 获取 **并行** 执行（节省 ~1s）
+        // 1. 下载图片并转 Base64
         console.log(`[识别] 下载图片: ${imageUrl}`);
-        let imageBase64, tokenResult;
+        let imageBase64;
         try {
-            const [imgResult, tkResult] = await Promise.all([
-                downloadImageAsBase64(imageUrl).then(b64 => {
-                    console.log(`[计时] 图片下载+转码: ${Date.now() - reqStartMs}ms`);
-                    return b64;
-                }),
-                ensureToken().then(tk => {
-                    console.log(`[计时] 获取token: ${Date.now() - reqStartMs}ms`);
-                    return tk;
-                }),
-            ]);
-            imageBase64 = imgResult;
-            tokenResult = tkResult;
+            imageBase64 = await downloadImageAsBase64(imageUrl);
+            console.log(`[计时] 图片下载+转码: ${Date.now() - reqStartMs}ms`);
         } catch (e) {
             stopKeepAlive();
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
-            const msg = e.message.includes('token') || e.message.includes('Token')
-                ? `EasyAR 服务连接失败: ${e.message}`
-                : `图片下载失败: ${e.message}`;
-            sendAnswer(res, messageId, agentId, msg);
+            sendAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`);
+            sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+            sendSSEDone(res, messageId, agentId);
+            return;
+        }
+
+        // 2. 获取 token
+        let tokenResult;
+        try {
+            tokenResult = await ensureToken();
+            console.log(`[计时] 获取token: ${Date.now() - reqStartMs}ms`);
+        } catch (e) {
+            stopKeepAlive();
+            if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
+            sendAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`);
             sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             sendSSEDone(res, messageId, agentId);
             return;
@@ -366,7 +368,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         if (clientGone) { stopKeepAlive(); console.log('[SSE] 客户端已断开, 跳过识别'); return; }
 
-        // 3. 调用 EasyAR 云识别（不设激进超时，让 EasyAR 正常返回结果）
+        // 3. 调用 EasyAR 云识别
         console.log('[识别] 调用 EasyAR 云识别...');
         let result;
         try {
@@ -391,20 +393,10 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         // 4. 处理识别结果
         if (!result || !result.target) {
-            const retries = incrementRetry(userId);
-            const remaining = LINGZHU_MAX_RETRIES - retries;
-            console.log(`[重试] 用户 ${userId} 连续失败 ${retries}/${LINGZHU_MAX_RETRIES} 次`);
-
-            if (remaining > 0) {
-                sendAnswer(res, messageId, agentId,
-                    `未识别到匹配的目标，请对准标识物重新拍照。(剩余${remaining}次)`);
-                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
-            } else {
-                resetRetry(userId);
-                sendAnswer(res, messageId, agentId,
-                    '多次识别未成功，请确认标识物是否正确后重新唤起助手再试。');
-                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
-            }
+            sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。');
+            sendToolCall(res, messageId, agentId, {
+                command: 'take_photo',
+            });
             sendSSEDone(res, messageId, agentId);
             console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (未识别)`);
             return;
@@ -498,11 +490,10 @@ app.listen(LINGZHU_PORT, '0.0.0.0', () => {
     // 预加载 EasyAR token + 预热 HTTPS 连接池
     ensureToken().then(async (tk) => {
         console.log('[启动] EasyAR token 预加载成功');
-        // 用一张 1x1 空白图发一次请求，建立 HTTPS 连接（DNS + TCP + TLS）
         if (EASYAR_CLIENT_END_URL) {
             try {
                 const dummyBase64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP///wAAAf/bAEMA//8A/9k=';
-                await recognize(EASYAR_CLIENT_END_URL, tk.token, tk.crsAppId || EASYAR_CRS_APPID, dummyBase64, 5000);
+                await recognize(EASYAR_CLIENT_END_URL, tk.token, tk.crsAppId || EASYAR_CRS_APPID, dummyBase64);
             } catch (_) {
                 // 预热请求失败是正常的（空白图不会被识别），目的只是建立连接
             }
@@ -511,4 +502,5 @@ app.listen(LINGZHU_PORT, '0.0.0.0', () => {
     }).catch((e) => {
         console.warn(`[启动] EasyAR 预加载失败: ${e.message}（首次请求时会重试）`);
     });
+
 });

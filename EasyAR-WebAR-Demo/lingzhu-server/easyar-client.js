@@ -8,14 +8,11 @@ const http = require('http');
 const crypto = require('crypto');
 let sharp = null;
 try {
+    // 可选依赖：用于将 webp 转成 jpeg，提升 EasyAR 兼容性
     sharp = require('sharp');
 } catch (_) {
     // 未安装 sharp 时仍可运行，只是无法自动转码
 }
-
-// 持久连接池 —— 避免每次请求都做 TLS 握手（省 200-500ms）
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 10 });
-const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 10 });
 
 /**
  * 生成 EasyAR Cloud Recognition Token
@@ -58,7 +55,7 @@ async function getTokenFromLocal(webarPort = 3000, expire = 86400) {
  * @param {string} imageBase64 - 图片 Base64 编码
  * @returns {Promise<object>} 识别结果
  */
-async function recognize(clientEndUrl, token, crsAppId, imageBase64, timeoutMs = 0) {
+async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
     const url = new URL(`${clientEndUrl}/search`);
 
     const body = JSON.stringify({
@@ -68,8 +65,6 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64, timeoutMs =
     });
 
     return new Promise((resolve, reject) => {
-        let timedOut = false;
-
         const options = {
             hostname: url.hostname,
             port: url.port || 8443,
@@ -79,7 +74,7 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64, timeoutMs =
                 'Content-Type': 'application/json;Charset=UTF-8',
                 'Authorization': token,
             },
-            agent: httpsAgent,
+            // 允许自签名证书（开发用）
             rejectUnauthorized: false,
         };
 
@@ -87,13 +82,12 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64, timeoutMs =
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
-                if (timedOut) return;
                 try {
                     const json = JSON.parse(data);
                     if (json.statusCode === 0) {
                         resolve(json.result);
                     } else if (json.statusCode === 17) {
-                        resolve(null);
+                        resolve(null); // 未识别到目标
                     } else {
                         reject(new Error(`识别请求失败: ${JSON.stringify(json)}`));
                     }
@@ -102,16 +96,7 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64, timeoutMs =
                 }
             });
         });
-        req.on('error', (e) => { if (!timedOut) reject(e); });
-
-        if (timeoutMs > 0) {
-            req.setTimeout(timeoutMs, () => {
-                timedOut = true;
-                req.destroy();
-                reject(new Error(`识别超时(${timeoutMs}ms)`));
-            });
-        }
-
+        req.on('error', reject);
         req.write(body);
         req.end();
     });
@@ -140,9 +125,8 @@ function parseMeta(metaBase64) {
  */
 async function downloadImageAsBase64(imageUrl) {
     return new Promise((resolve, reject) => {
-        const isHttps = imageUrl.startsWith('https');
-        const protocol = isHttps ? https : http;
-        protocol.get(imageUrl, { agent: isHttps ? httpsAgent : httpAgent, rejectUnauthorized: false }, (res) => {
+        const protocol = imageUrl.startsWith('https') ? https : http;
+        protocol.get(imageUrl, { rejectUnauthorized: false }, (res) => {
             // 处理重定向
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return downloadImageAsBase64(res.headers.location).then(resolve).catch(reject);
@@ -160,14 +144,14 @@ async function downloadImageAsBase64(imageUrl) {
                     const contentType = (res.headers['content-type'] || '').toLowerCase();
                     console.log(`[图片] 下载完成: content-type=${contentType || '(unknown)'}, bytes=${buffer.length}`);
 
-                    if (sharp) {
-                        buffer = await sharp(buffer)
-                            .resize({ width: 800, height: 800, fit: 'inside', withoutEnlargement: true })
-                            .jpeg({ quality: 60 })
-                            .toBuffer();
-                        console.log(`[图片] 转码+缩放完成 (jpeg q60 max800), bytes=${buffer.length}`);
-                    } else if (contentType.includes('image/webp')) {
-                        console.warn('[图片] 当前是 webp，且未安装 sharp，可能导致 EasyAR 识别失败');
+                    // EasyAR 对 webp 兼容不稳定，统一转 jpeg 后再识别
+                    if (contentType.includes('image/webp')) {
+                        if (sharp) {
+                            buffer = await sharp(buffer).jpeg({ quality: 92 }).toBuffer();
+                            console.log(`[图片] webp -> jpeg 转码成功, bytes=${buffer.length}`);
+                        } else {
+                            console.warn('[图片] 当前是 webp，且未安装 sharp，可能导致 EasyAR 识别失败');
+                        }
                     }
 
                     resolve(buffer.toString('base64'));
