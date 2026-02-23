@@ -78,18 +78,10 @@ function sendSSE(res, data) {
     res.write(`event:message\ndata:${json}\n\n`);
 }
 
-function sendSSEDone(res, messageId, agentId) {
-    // 按灵珠协议发送 done 事件，data 使用 JSON，避免 [DONE] 文本导致解析分歧
-    const doneData = {
-        role: 'agent',
-        type: 'answer',
-        message_id: messageId,
-        agent_id: agentId,
-        is_finish: true,
-    };
-    const json = JSON.stringify(doneData);
-    console.log(`[SSE] >> event:done data:${json}`);
-    res.write(`event:done\ndata:${json}\n\n`);
+function sendSSEDone(res) {
+    // done 使用 [DONE]，兼容常见 SSE 客户端实现
+    console.log('[SSE] >> event:done data:[DONE]');
+    res.write('event:done\ndata:[DONE]\n\n');
     res.end();
 }
 
@@ -254,7 +246,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 sendToolCall(res, messageId, agentId, {
                     command: 'take_photo',
                 });
-                sendSSEDone(res, messageId, agentId);
+                sendSSEDone(res);
                 return;
             }
 
@@ -263,42 +255,37 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 sendToolCall(res, messageId, agentId, {
                     command: 'take_photo',
                 });
-                sendSSEDone(res, messageId, agentId);
+                sendSSEDone(res);
                 return;
             }
 
             await streamAnswer(res, messageId, agentId, '请拍照后发送图片，我会识别并导航到对应地点。');
-            sendSSEDone(res, messageId, agentId);
+            sendSSEDone(res);
             return;
         }
 
-        // 1. 先发送处理中状态，避免客户端在长耗时识别阶段提前退出
-        sendAnswer(res, messageId, agentId, '正在识别图片...', false);
-
-        // 2. 下载图片并转 Base64
+        // 1. 下载图片并转 Base64
         console.log(`[识别] 下载图片: ${imageUrl}`);
         let imageBase64;
         try {
             imageBase64 = await downloadImageAsBase64(imageUrl);
         } catch (e) {
-            await streamAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`);
-            await sleep(120);
-            sendSSEDone(res, messageId, agentId);
+            sendAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`, true);
+            sendSSEDone(res);
             return;
         }
 
-        // 3. 获取 token
+        // 2. 获取 token
         let tokenResult;
         try {
             tokenResult = await ensureToken();
         } catch (e) {
-            await streamAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`);
-            await sleep(120);
-            sendSSEDone(res, messageId, agentId);
+            sendAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`, true);
+            sendSSEDone(res);
             return;
         }
 
-        // 4. 调用 EasyAR 云识别
+        // 3. 调用 EasyAR 云识别
         console.log('[识别] 调用 EasyAR 云识别...');
         let result;
         try {
@@ -309,18 +296,16 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 imageBase64
             );
         } catch (e) {
-            await streamAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`);
-            await sleep(120);
-            sendSSEDone(res, messageId, agentId);
+            sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`, true);
+            sendSSEDone(res);
             return;
         }
 
-        // 5. 处理识别结果
+        // 4. 处理识别结果
         if (!result || !result.target) {
-            // 用户要求：识图失败时也要把提示发到眼镜端
-            await streamAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。');
-            await sleep(120);
-            sendSSEDone(res, messageId, agentId);
+            // 识图失败时发送单条最终消息，避免客户端丢弃流式中间态
+            sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。', true);
+            sendSSEDone(res);
             return;
         }
 
@@ -353,19 +338,17 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 const info = meta
                     ? `识别到: ${target.name}\n详细信息: ${JSON.stringify(meta, null, 2)}`
                     : `识别到: ${target.name}`;
-                await streamAnswer(res, messageId, agentId, info);
-                await sleep(120);
+                sendAnswer(res, messageId, agentId, info, true);
             }
         }
 
-        sendSSEDone(res, messageId, agentId);
+        sendSSEDone(res);
 
     } catch (e) {
         console.error('[错误]', e);
         try {
-            await streamAnswer(res, messageId, agentId, `服务异常: ${e.message}`);
-            await sleep(120);
-            sendSSEDone(res, messageId, agentId);
+            sendAnswer(res, messageId, agentId, `服务异常: ${e.message}`, true);
+            sendSSEDone(res);
         } catch (_) {
             // 连接可能已断开
         }
