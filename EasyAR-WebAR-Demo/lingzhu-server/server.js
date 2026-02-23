@@ -264,8 +264,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         }
     });
 
-    // 心跳定时器（在长耗时处理期间保持连接活跃）
-    // 使用真实 answer 事件而非 SSE 注释，确保 Rokid 平台视为有效数据
+    // 心跳定时器 —— 使用 SSE 注释保持连接，不干扰 Rokid 平台的 answer 渲染
     let keepAliveTimer = null;
     function startKeepAlive() {
         keepAliveTimer = setInterval(() => {
@@ -274,8 +273,8 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
                 return;
             }
             try {
-                sendAnswer(res, messageId, agentId, '识别中...');
-                console.log(`[SSE] >> keepalive answer (${Date.now() - reqStartMs}ms)`);
+                res.write(`: heartbeat ${Date.now()}\n\n`);
+                console.log(`[SSE] >> heartbeat (${Date.now() - reqStartMs}ms)`);
             } catch (_) {
                 clearInterval(keepAliveTimer);
             }
