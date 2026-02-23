@@ -368,10 +368,19 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         // 4. 处理识别结果
         if (!result || !result.target) {
-            sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。');
-            sendToolCall(res, messageId, agentId, {
-                command: 'take_photo',
-            });
+            const retryCount = incrementRetry(userId);
+            console.log(`[重试] 用户 ${userId} 连续失败 ${retryCount}/${LINGZHU_MAX_RETRIES}`);
+
+            if (retryCount < LINGZHU_MAX_RETRIES) {
+                sendAnswer(res, messageId, agentId,
+                    `未识别到匹配的目标，请对准标识物重新拍照。(${LINGZHU_MAX_RETRIES - retryCount}次机会)`);
+                sendToolCall(res, messageId, agentId, { command: 'take_photo' });
+            } else {
+                sendAnswer(res, messageId, agentId,
+                    '多次识别未成功，请确认标识物是否正确后重新唤起助手再试。', true);
+                resetRetry(userId);
+            }
+
             sendSSEDone(res, messageId, agentId);
             console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (未识别)`);
             return;
