@@ -144,14 +144,15 @@ async function downloadImageAsBase64(imageUrl) {
                     const contentType = (res.headers['content-type'] || '').toLowerCase();
                     console.log(`[图片] 下载完成: content-type=${contentType || '(unknown)'}, bytes=${buffer.length}`);
 
-                    // EasyAR 对 webp 兼容不稳定，统一转 jpeg 后再识别
-                    if (contentType.includes('image/webp')) {
-                        if (sharp) {
-                            buffer = await sharp(buffer).jpeg({ quality: 92 }).toBuffer();
-                            console.log(`[图片] webp -> jpeg 转码成功, bytes=${buffer.length}`);
-                        } else {
-                            console.warn('[图片] 当前是 webp，且未安装 sharp，可能导致 EasyAR 识别失败');
-                        }
+                    if (sharp) {
+                        // 统一转 jpeg + 限制尺寸，减少 base64 体积和 EasyAR API 耗时
+                        buffer = await sharp(buffer)
+                            .resize({ width: 1024, height: 1024, fit: 'inside', withoutEnlargement: true })
+                            .jpeg({ quality: 75 })
+                            .toBuffer();
+                        console.log(`[图片] 转码+缩放完成 (jpeg q75 max1024), bytes=${buffer.length}`);
+                    } else if (contentType.includes('image/webp')) {
+                        console.warn('[图片] 当前是 webp，且未安装 sharp，可能导致 EasyAR 识别失败');
                     }
 
                     resolve(buffer.toString('base64'));
