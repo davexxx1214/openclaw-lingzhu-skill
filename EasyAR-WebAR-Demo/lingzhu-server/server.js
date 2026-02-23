@@ -333,8 +333,9 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
 
         // ── 图片处理分支 —— 耗时操作，需要保活 ──
 
-        // 立即发送第一条数据，防止客户端因空闲超时断开
-        sendAnswer(res, messageId, agentId, '正在识别图片，请稍候...');
+        // 不发送初始 answer 事件：如果先发 answer(is_finish:false)，Rokid 平台
+        // 会进入"文本回复"模式，后续的 tool_call(take_navigation) 会被忽略。
+        // 仅用 SSE 注释心跳保持 TCP 连接活跃（注释不触发平台状态机）。
         startKeepAlive();
 
         // 1. 下载图片并转 Base64
