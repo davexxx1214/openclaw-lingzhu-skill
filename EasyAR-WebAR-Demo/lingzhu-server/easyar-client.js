@@ -6,6 +6,10 @@
 const https = require('https');
 const http = require('http');
 const crypto = require('crypto');
+
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 10 });
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 10 });
+
 let sharp = null;
 try {
     // 可选依赖：用于将 webp 转成 jpeg，提升 EasyAR 兼容性
@@ -74,7 +78,7 @@ async function recognize(clientEndUrl, token, crsAppId, imageBase64) {
                 'Content-Type': 'application/json;Charset=UTF-8',
                 'Authorization': token,
             },
-            // 允许自签名证书（开发用）
+            agent: httpsAgent,
             rejectUnauthorized: false,
         };
 
@@ -125,8 +129,10 @@ function parseMeta(metaBase64) {
  */
 async function downloadImageAsBase64(imageUrl) {
     return new Promise((resolve, reject) => {
-        const protocol = imageUrl.startsWith('https') ? https : http;
-        protocol.get(imageUrl, { rejectUnauthorized: false }, (res) => {
+        const isHttps = imageUrl.startsWith('https');
+        const protocol = isHttps ? https : http;
+        const opts = { rejectUnauthorized: false, agent: isHttps ? httpsAgent : httpAgent };
+        protocol.get(imageUrl, opts, (res) => {
             // 处理重定向
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return downloadImageAsBase64(res.headers.location).then(resolve).catch(reject);
@@ -169,4 +175,5 @@ module.exports = {
     recognize,
     parseMeta,
     downloadImageAsBase64,
+    _httpsAgent: httpsAgent,
 };

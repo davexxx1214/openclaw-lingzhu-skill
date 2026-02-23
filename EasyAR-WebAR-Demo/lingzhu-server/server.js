@@ -266,29 +266,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         }
     });
 
-    // 心跳定时器 —— 在长耗时图片处理期间保持 SSE 连接活跃
-    let keepAliveTimer = null;
-    function startKeepAlive() {
-        keepAliveTimer = setInterval(() => {
-            if (clientGone || res.writableEnded) {
-                clearInterval(keepAliveTimer);
-                return;
-            }
-            try {
-                res.write(`: heartbeat ${Date.now()}\n\n`);
-                console.log(`[SSE] >> heartbeat (${Date.now() - reqStartMs}ms)`);
-            } catch (_) {
-                clearInterval(keepAliveTimer);
-            }
-        }, 1500);
-    }
-    function stopKeepAlive() {
-        if (keepAliveTimer) {
-            clearInterval(keepAliveTimer);
-            keepAliveTimer = null;
-        }
-    }
-
     try {
         // 提取图片和文本
         const messages = message || [];
@@ -331,12 +308,12 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        // ── 图片处理分支 —— 耗时操作，需要保活 ──
-
-        // 不发送初始 answer 事件：如果先发 answer(is_finish:false)，Rokid 平台
-        // 会进入"文本回复"模式，后续的 tool_call(take_navigation) 会被忽略。
-        // 仅用 SSE 注释心跳保持 TCP 连接活跃（注释不触发平台状态机）。
-        startKeepAlive();
+        // ── 图片处理分支 ──
+        //
+        // 不发送初始 answer 事件，也不发送 SSE 注释心跳。
+        // 原因：如果先发 answer(is_finish:false) 或 SSE 注释，Rokid 平台
+        // 会忽略后续 tool_call(take_navigation)。
+        // 依赖 keepAlive 连接复用 + 预热来保证处理速度在平台超时窗口内。
 
         // 1. 下载图片并转 Base64
         console.log(`[识别] 下载图片: ${imageUrl}`);
@@ -345,7 +322,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             imageBase64 = await downloadImageAsBase64(imageUrl);
             console.log(`[计时] 图片下载+转码: ${Date.now() - reqStartMs}ms`);
         } catch (e) {
-            stopKeepAlive();
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             sendAnswer(res, messageId, agentId, `图片下载失败: ${e.message}`);
             sendToolCall(res, messageId, agentId, { command: 'take_photo' });
@@ -359,7 +335,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             tokenResult = await ensureToken();
             console.log(`[计时] 获取token: ${Date.now() - reqStartMs}ms`);
         } catch (e) {
-            stopKeepAlive();
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             sendAnswer(res, messageId, agentId, `EasyAR 服务连接失败: ${e.message}`);
             sendToolCall(res, messageId, agentId, { command: 'take_photo' });
@@ -367,7 +342,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        if (clientGone) { stopKeepAlive(); console.log('[SSE] 客户端已断开, 跳过识别'); return; }
+        if (clientGone) { console.log('[SSE] 客户端已断开, 跳过识别'); return; }
 
         // 3. 调用 EasyAR 云识别
         console.log('[识别] 调用 EasyAR 云识别...');
@@ -381,7 +356,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             );
             console.log(`[计时] EasyAR识别: ${Date.now() - reqStartMs}ms`);
         } catch (e) {
-            stopKeepAlive();
             if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
             sendAnswer(res, messageId, agentId, `识别请求失败: ${e.message}`);
             sendToolCall(res, messageId, agentId, { command: 'take_photo' });
@@ -389,7 +363,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             return;
         }
 
-        stopKeepAlive();
         if (clientGone) { console.log('[SSE] 客户端已断开, 跳过响应'); return; }
 
         // 4. 处理识别结果
@@ -429,7 +402,6 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
         console.log(`[计时] 总耗时: ${Date.now() - reqStartMs}ms (完成)`);
 
     } catch (e) {
-        stopKeepAlive();
         console.error('[错误]', e);
         try {
             if (!clientGone) {
@@ -502,6 +474,18 @@ app.listen(LINGZHU_PORT, '0.0.0.0', () => {
         }
     }).catch((e) => {
         console.warn(`[启动] EasyAR 预加载失败: ${e.message}（首次请求时会重试）`);
+    });
+
+    // 预热 Rokid CDN 连接（basecloud.rokidcdn.com），减少首次图片下载的 TLS 握手耗时
+    const { _httpsAgent: cdnAgent } = require('./easyar-client');
+    https.get('https://basecloud.rokidcdn.com/', {
+        agent: cdnAgent,
+        rejectUnauthorized: false,
+    }, (cdnRes) => {
+        cdnRes.resume();
+        console.log('[启动] Rokid CDN 连接预热完成');
+    }).on('error', () => {
+        console.warn('[启动] Rokid CDN 预热失败（首次下载会稍慢）');
     });
 
 });
