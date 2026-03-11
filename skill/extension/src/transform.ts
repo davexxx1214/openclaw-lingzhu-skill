@@ -212,7 +212,7 @@ function extractLingzhuToolMarker(
   }
 
   const commandSeparator = text.indexOf(":", markerStart + markerPrefix.length);
-  const markerEnd = text.indexOf(">", commandSeparator + 1);
+  const markerEnd = text.lastIndexOf(">");
   if (commandSeparator < 0 || markerEnd < 0) {
     return null;
   }

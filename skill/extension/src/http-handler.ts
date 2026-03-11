@@ -738,6 +738,7 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
       let fullResponse = "";
       const toolAccumulator = new ToolCallAccumulator();
       const streamedToolCalls: LingzhuSSEData[] = [];
+      let streamedAnswer = false;
       const reader = openclawResponse.body?.getReader();
       if (!reader) {
         throw new Error("No response body");
@@ -785,6 +786,21 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
 
               if (delta?.content) {
                 fullResponse += delta.content;
+                streamedAnswer = true;
+                const answerChunkData: LingzhuSSEData = {
+                  role: "agent",
+                  type: "answer",
+                  answer_stream: delta.content,
+                  message_id: body.message_id,
+                  agent_id: body.agent_id,
+                  is_finish: false,
+                };
+                writeDebugLog(
+                  config,
+                  buildRequestLogName(body.message_id, "response.answer_chunk"),
+                  summarizeForDebug(answerChunkData, includePayload)
+                );
+                safeWrite(formatLingzhuSSE("message", answerChunkData));
               }
 
               if (finishReason === "tool_calls" || (finishReason && toolAccumulator.hasTools())) {
@@ -823,23 +839,6 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
 
       const hasToolCall = streamedToolCalls.length > 0;
 
-      if (hasToolCall && fullResponse.trim()) {
-        const answerBeforeToolData: LingzhuSSEData = {
-          role: "agent",
-          type: "answer",
-          answer_stream: fullResponse,
-          message_id: body.message_id,
-          agent_id: body.agent_id,
-          is_finish: false,
-        };
-        writeDebugLog(
-          config,
-          buildRequestLogName(body.message_id, "response.answer_before_tool"),
-          summarizeForDebug(answerBeforeToolData, includePayload)
-        );
-        safeWrite(formatLingzhuSSE("message", answerBeforeToolData));
-      }
-
       if (hasToolCall) {
         for (const toolData of streamedToolCalls) {
           safeWrite(formatLingzhuSSE("message", toolData));
@@ -869,6 +868,38 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
             summarizeForDebug(toolData, includePayload)
           );
           safeWrite(sseOutput);
+        }
+      } else if (!hasToolCall && streamedAnswer) {
+        const finalAnswerData: LingzhuSSEData = {
+          role: "agent",
+          type: "answer",
+          answer_stream: "",
+          message_id: body.message_id,
+          agent_id: body.agent_id,
+          is_finish: true,
+        };
+        writeDebugLog(
+          config,
+          buildRequestLogName(body.message_id, "response.answer_done"),
+          summarizeForDebug(finalAnswerData, includePayload)
+        );
+        safeWrite(formatLingzhuSSE("message", finalAnswerData));
+
+        if (config.enableFollowUp !== false) {
+          const followUps = extractFollowUpFromText(
+            fullResponse,
+            typeof config.followUpMaxCount === "number" ? config.followUpMaxCount : 3
+          );
+
+          if (followUps && followUps.length > 0) {
+            const followUpData = createFollowUpResponse(followUps, body.message_id, body.agent_id);
+            writeDebugLog(
+              config,
+              buildRequestLogName(body.message_id, "response.follow_up"),
+              summarizeForDebug(followUpData, includePayload)
+            );
+            safeWrite(formatLingzhuSSE("message", followUpData));
+          }
         }
       } else if (!hasToolCall && fullResponse) {
         const finalAnswerData: LingzhuSSEData = {
