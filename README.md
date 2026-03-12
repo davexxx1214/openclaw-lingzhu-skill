@@ -45,7 +45,7 @@ openclaw plugins install -l ./skill/extension
 
 ### Quick Start
 
-1. **Enable HTTP Chat Completions endpoint** in `moltbot.json`:
+1. **Enable HTTP Chat Completions endpoint** in `openclaw.json`:
 
 ```json
 {
@@ -61,7 +61,7 @@ openclaw plugins install -l ./skill/extension
 }
 ```
 
-2. **Configure the plugin** in `moltbot.json`:
+2. **Configure the plugin** in `openclaw.json`:
 
 ```json
 {
@@ -120,7 +120,6 @@ openclaw-lingzhu-skill/
 │       ├── package.json           # Plugin dependencies
 │       ├── index.ts               # Plugin entry point
 │       ├── openclaw.plugin.json   # OpenClaw plugin configuration
-│       ├── moltbot.plugin.json    # Moltbot plugin configuration
 │       └── src/
 │           ├── types.ts           # TypeScript type definitions
 │           ├── config.ts          # Configuration management
@@ -199,7 +198,7 @@ openclaw plugins install -l ./skill/extension
 
 ### 快速开始
 
-1. **在 `moltbot.json` 中启用 HTTP Chat Completions 端点**：
+1. **在 `openclaw.json` 中启用 HTTP Chat Completions 端点**：
 
 ```json
 {
@@ -215,7 +214,7 @@ openclaw plugins install -l ./skill/extension
 }
 ```
 
-2. **在 `moltbot.json` 中配置插件**：
+2. **在 `openclaw.json` 中配置插件**：
 
 ```json
 {
@@ -274,7 +273,6 @@ openclaw-lingzhu-skill/
 │       ├── package.json           # 插件依赖
 │       ├── index.ts               # 插件入口点
 │       ├── openclaw.plugin.json   # OpenClaw 插件配置
-│       ├── moltbot.plugin.json    # Moltbot 插件配置
 │       └── src/
 │           ├── types.ts           # TypeScript 类型定义
 │           ├── config.ts          # 配置管理
