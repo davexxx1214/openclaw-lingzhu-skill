@@ -74,12 +74,12 @@ function buildSessionKey(config: LingzhuConfig, body: LingzhuRequest): string {
 
   switch (config.sessionMode) {
     case "shared_agent":
-      return `${namespace}:${targetAgentId}:shared`;
+      return `agent:${targetAgentId}:${namespace}_shared`;
     case "per_message":
-      return `${namespace}:${targetAgentId}:${body.message_id}`;
+      return `agent:${targetAgentId}:${namespace}_${body.message_id}`;
     case "per_user":
     default:
-      return `${namespace}:${targetAgentId}:${userId}`;
+      return `agent:${targetAgentId}:${namespace}_${userId}`;
   }
 }
 
@@ -481,7 +481,7 @@ async function preprocessOpenAIMessages(
       if (finalContent) {
         finalContent = `${finalContent}\n\n${imageRefs}`;
       } else {
-        finalContent = `用户发送了一张图片\n\n${imageRefs}`;
+        finalContent = `读取这个图片\n\n${imageRefs},请根据执行的对话内容进行回答`;
         logger.info("[Lingzhu] 为纯图片消息添加了占位文本");
       }
     }
@@ -674,7 +674,7 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
       const targetAgentId = config.agentId || body.agent_id || "main";
       const gatewayPort = api.config?.gateway?.port ?? state.gatewayPort ?? 18789;
       const gatewayToken = api.config?.gateway?.auth?.token;
-      const lingzhuTools = createLingzhuToolSchemas(config.enableExperimentalNativeActions === true);
+      // const lingzhuTools = createLingzhuToolSchemas(config.enableExperimentalNativeActions === true);
 
       nativeToolListener = (eventData: any) => {
         logger.info(`[Lingzhu:NativeEvent] Received native_invoke event: ${JSON.stringify(eventData)}`);
@@ -721,13 +721,14 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
         user: sessionKey,
         client: "lingzhu",
         platform: "lingzhu",
-        tools: lingzhuTools,
+        // tools: lingzhuTools,
       };
 
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         "x-openclaw-agent-id": targetAgentId,
         "x-openclaw-session-key": sessionKey,
+        // "x-openclaw-message-channel": "lingzhu",
         "x-openclaw-client": "lingzhu",
         "x-openclaw-platform": "lingzhu",
       };

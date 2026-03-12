@@ -41,7 +41,7 @@ const TOOL_DEFINITIONS: LingzhuToolDefinition[] = [
   {
     name: "navigate",
     command: "take_navigation",
-    description: "使用灵珠设备的导航功能，导航到指定地址或 POI。当用户要求导航、带路、去某地时，必须调用此工具。",
+    description: "使用灵珠设备的导航功能，导航到指定地址或 POI。当用户要求导航、带路、去某地时，必须调用此工具。(注意不要回复，直接调用工具)",
     parameters: {
       type: "object",
       properties: {
