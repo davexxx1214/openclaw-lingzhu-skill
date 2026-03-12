@@ -20,7 +20,6 @@ import {
 } from "./transform.js";
 import { buildRequestLogName, summarizeForDebug, writeDebugLog } from "./debug-log.js";
 import { cleanupImageCacheIfNeeded, ensureImageCacheDir } from "./image-cache.js";
-import { createLingzhuToolSchemas } from "./lingzhu-tools.js";
 import { lingzhuEventBus } from "./events.js";
 
 interface LingzhuRuntimeState {
@@ -674,7 +673,6 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
       const targetAgentId = config.agentId || body.agent_id || "main";
       const gatewayPort = api.config?.gateway?.port ?? state.gatewayPort ?? 18789;
       const gatewayToken = api.config?.gateway?.auth?.token;
-      // const lingzhuTools = createLingzhuToolSchemas(config.enableExperimentalNativeActions === true);
 
       nativeToolListener = (eventData: any) => {
         logger.info(`[Lingzhu:NativeEvent] Received native_invoke event: ${JSON.stringify(eventData)}`);
@@ -728,9 +726,9 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
         "Content-Type": "application/json",
         "x-openclaw-agent-id": targetAgentId,
         "x-openclaw-session-key": sessionKey,
-        // "x-openclaw-message-channel": "lingzhu",
-        "x-openclaw-client": "lingzhu",
-        "x-openclaw-platform": "lingzhu",
+        "x-openclaw-message-channel": "lingzhu",
+        // "x-openclaw-client": "lingzhu",
+        // "x-openclaw-platform": "lingzhu",
       };
       if (gatewayToken) {
         headers.Authorization = `Bearer ${gatewayToken}`;
