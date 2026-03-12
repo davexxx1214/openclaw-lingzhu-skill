@@ -21,6 +21,7 @@ import {
 import { buildRequestLogName, summarizeForDebug, writeDebugLog } from "./debug-log.js";
 import { cleanupImageCacheIfNeeded, ensureImageCacheDir } from "./image-cache.js";
 import { createLingzhuToolSchemas } from "./lingzhu-tools.js";
+import { lingzhuEventBus } from "./events.js";
 
 interface LingzhuRuntimeState {
   config: LingzhuConfig;
@@ -600,6 +601,8 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
 
     let requestMessageId = "unknown";
     let requestAgentId = "unknown";
+    let nativeToolListener: ((eventData: any) => void) | undefined;
+    let nativeToolInvoked = false;
 
     try {
       const body = (await readJsonBody(req)) as LingzhuRequest | undefined;
@@ -672,12 +675,52 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
       const gatewayPort = api.config?.gateway?.port ?? state.gatewayPort ?? 18789;
       const gatewayToken = api.config?.gateway?.auth?.token;
       const lingzhuTools = createLingzhuToolSchemas(config.enableExperimentalNativeActions === true);
+
+      nativeToolListener = (eventData: any) => {
+        logger.info(`[Lingzhu:NativeEvent] Received native_invoke event: ${JSON.stringify(eventData)}`);
+        logger.info(`[Lingzhu:NativeEvent] Current sessionKey=${sessionKey}, targetAgentId=${targetAgentId}`);
+
+        if (eventData.sessionKey && eventData.sessionKey !== sessionKey) {
+          logger.warn(`[Lingzhu:NativeEvent] Filtered out! Event sessionKey (${eventData.sessionKey}) != current (${sessionKey})`);
+          return;
+        }
+        if (!eventData.sessionKey && eventData.agentId && eventData.agentId !== targetAgentId) {
+          logger.warn(`[Lingzhu:NativeEvent] Filtered out by agentId! Event agentId (${eventData.agentId}) != target (${targetAgentId})`);
+          return;
+        }
+
+        logger.info(`[Lingzhu:NativeEvent] Match successful! Firing SSE tool data...`);
+        nativeToolInvoked = true;
+
+        const toolData: LingzhuSSEData = {
+          role: "agent",
+          type: "tool_call",
+          message_id: body.message_id,
+          agent_id: body.agent_id,
+          is_finish: false,  // 重要：不要过早发送 is_finish: true，避免 Lingzhu 代理粗暴断流
+          tool_call: eventData.tool_call,
+        };
+
+        writeDebugLog(
+          config,
+          buildRequestLogName(body.message_id, "response.native_tool_call"),
+          summarizeForDebug(toolData, includePayload)
+        );
+
+        const sseFormatted = formatLingzhuSSE("message", toolData);
+        logger.info(`[Lingzhu:DEBUG] Sending Native SSE >> ${sseFormatted.replace(/\n/g, '\\n')}`);
+        safeWrite(sseFormatted);
+      };
+      lingzhuEventBus.on("native_invoke", nativeToolListener);
+
       const openclawUrl = `http://127.0.0.1:${gatewayPort}/v1/chat/completions`;
       const openclawBody = {
         model: `openclaw:${targetAgentId}`,
         stream: true,
         messages: openaiMessages,
         user: sessionKey,
+        client: "lingzhu",
+        platform: "lingzhu",
         tools: lingzhuTools,
       };
 
@@ -685,6 +728,8 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
         "Content-Type": "application/json",
         "x-openclaw-agent-id": targetAgentId,
         "x-openclaw-session-key": sessionKey,
+        "x-openclaw-client": "lingzhu",
+        "x-openclaw-platform": "lingzhu",
       };
       if (gatewayToken) {
         headers.Authorization = `Bearer ${gatewayToken}`;
@@ -816,7 +861,7 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
                       type: "tool_call",
                       message_id: body.message_id,
                       agent_id: body.agent_id,
-                      is_finish: true,
+                      is_finish: false, // 改为 false，配合结尾的 is_finish
                       tool_call: lingzhuToolCall,
                     };
                     writeDebugLog(
@@ -837,15 +882,17 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
         stopKeepalive();
       }
 
-      const hasToolCall = streamedToolCalls.length > 0;
+      const hasToolCall = streamedToolCalls.length > 0 || nativeToolInvoked;
 
-      if (hasToolCall) {
+      if (!nativeToolInvoked && streamedToolCalls.length > 0) {
         for (const toolData of streamedToolCalls) {
-          safeWrite(formatLingzhuSSE("message", toolData));
+          const sseFormatted = formatLingzhuSSE("message", toolData);
+          logger.info(`[Lingzhu:DEBUG] Sending Streamed Tool SSE >> ${sseFormatted.replace(/\n/g, '\\n')}`);
+          safeWrite(sseFormatted);
         }
       }
 
-      if (!hasToolCall && fullResponse && fullResponse.includes("<LINGZHU_TOOL_CALL:")) {
+      if (!hasToolCall && fullResponse) {
         const detectedIntent = detectIntentFromText(fullResponse, {
           defaultNavigationMode: config.defaultNavigationMode,
           enableExperimentalNativeActions: config.enableExperimentalNativeActions,
@@ -857,11 +904,11 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
             type: "tool_call",
             message_id: body.message_id,
             agent_id: body.agent_id,
-            is_finish: true,
+            is_finish: false,
             tool_call: detectedIntent,
           };
           const sseOutput = formatLingzhuSSE("message", toolData);
-          logger.info(`[Lingzhu] 发送给灵珠的 SSE: ${sseOutput.replace(/\n/g, "\\n")}`);
+          logger.info(`[Lingzhu:DEBUG] Sending Legacy Intent SSE >> ${sseOutput.replace(/\n/g, "\\n")}`);
           writeDebugLog(
             config,
             buildRequestLogName(body.message_id, "response.intent_fallback"),
@@ -944,6 +991,20 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
         }
       );
 
+      // 如果整个请求链路中触发了任意 tool_call (原生 or 文本识别)，
+      // 补发一个空的 is_finish: true 作为最终流束结标记，适配灵珠的接收器逻辑
+      if (hasToolCall || nativeToolInvoked) {
+        const finalFinishData: LingzhuSSEData = {
+          role: "agent",
+          type: "answer",
+          answer_stream: "",
+          message_id: body.message_id,
+          agent_id: body.agent_id,
+          is_finish: true,
+        };
+        safeWrite(formatLingzhuSSE("message", finalFinishData));
+      }
+
       if (!res.writableEnded) {
         res.end();
       }
@@ -951,7 +1012,13 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
     } catch (error) {
       stopKeepalive();
       const errorMsg = error instanceof Error ? error.message : String(error);
-      logger.error(`[Lingzhu] Error: ${errorMsg}`);
+
+      if (errorMsg.includes("Client disconnected") || errorMsg.includes("Native tool fulfilled")) {
+        logger.info(`[Lingzhu] Request fulfilled or client disconnected normally: ${errorMsg}`);
+      } else {
+        logger.error(`[Lingzhu] Error: ${errorMsg}`);
+      }
+
       writeDebugLog(
         config,
         buildRequestLogName(requestMessageId, "error"),
@@ -974,6 +1041,10 @@ export function createHttpHandler(api: any, getRuntimeState: () => LingzhuRuntim
         };
         safeWrite(formatLingzhuSSE("message", errorData));
         res.end();
+      }
+    } finally {
+      if (nativeToolListener) {
+        lingzhuEventBus.off("native_invoke", nativeToolListener);
       }
     }
 

@@ -11,7 +11,7 @@ metadata: {"openclaw":{"emoji":"🔗","requires":{"plugins":["lingzhu"],"config"
 | `take_photo` | `take_photo`, `camera`, `photo` | 拍照 |
 | `take_navigation` | `navigate`, `navigation`, `maps` | 导航 |
 | `control_calendar` | `calendar`, `schedule`, `reminder` | 日程提醒 |
-| `notify_agent_off` | `exit`, `quit` | 退出智能体 |
+<!-- | `notify_agent_off` | `exit`, `quit` | 退出智能体 | -->
 | `send_notification` | `send_notification`, `notify` | 实验性通知 |
 | `send_toast` | `send_toast`, `toast` | 实验性提示 |
 | `speak_tts` | `speak_tts`, `tts` | 实验性播报 |

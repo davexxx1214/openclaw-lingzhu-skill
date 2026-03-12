@@ -1,4 +1,6 @@
 import type { LingzhuToolCall } from "./types.js";
+import { lingzhuEventBus } from "./events.js";
+import { parseToolCallFromAccumulated } from "./transform.js";
 
 type ToolParameters = {
   type: "object";
@@ -32,7 +34,7 @@ const TOOL_DEFINITIONS: LingzhuToolDefinition[] = [
   {
     name: "take_photo",
     command: "take_photo",
-    description: "使用灵珠设备的摄像头拍照。当用户要求拍照、拍摄、照相时，必须调用此工具。",
+    description: "使用灵珠设备的摄像头拍照。当用户要求拍照、拍摄、照相时，必须调用此工具，或者有使用关于视觉能力(看一下这个东西，看一下我前面有什么)。",
     parameters: EMPTY_PARAMS,
     statusText: () => "正在通过灵珠设备拍照...",
   },
@@ -198,9 +200,38 @@ export function createLingzhuTools(enableExperimentalNativeActions = false) {
     name: tool.name,
     description: tool.description,
     parameters: tool.parameters,
-    async execute(_id: string, params: Record<string, unknown>): Promise<ToolExecuteResult> {
+    async execute(_id: string, params: Record<string, unknown>, ctx?: any): Promise<ToolExecuteResult> {
+      console.log(`[Lingzhu:Native] Tool execute called for ${tool.name} with params:`, params);
+      console.log(`[Lingzhu:Native] Context (ctx) provided:`, ctx);
+
       const marker = formatToolMarker(tool.command, params);
       const statusText = tool.statusText?.(params) ?? "";
+
+      try {
+        const parsedToolCall = parseToolCallFromAccumulated(tool.name, JSON.stringify(params), {
+          enableExperimentalNativeActions
+        });
+
+        console.log(`[Lingzhu:Native] Parsed Tool Call:`, parsedToolCall);
+
+        if (parsedToolCall) {
+          const sessionKey = ctx?.user || ctx?.session?.user || ctx?.sessionKey || ctx?.sessionId;
+          const agentId = ctx?.agentId || ctx?.agent_id;
+
+          const emitPayload = {
+            sessionKey,
+            agentId,
+            tool_call: parsedToolCall
+          };
+          console.log(`[Lingzhu:Native] Emitting native_invoke with payload:`, emitPayload);
+
+          lingzhuEventBus.emit("native_invoke", emitPayload);
+        } else {
+          console.log(`[Lingzhu:Native] Failed to parse tool call from command ${tool.name}`);
+        }
+      } catch (err) {
+        console.error(`[Lingzhu:Native] Error during execute parsing:`, err);
+      }
 
       return {
         content: [

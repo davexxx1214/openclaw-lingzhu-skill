@@ -246,33 +246,31 @@ export function detectIntentFromText(
     const toolCall: LingzhuToolCall = {
       handling_required: true,
       command,
-      params: {
-        is_recall: true,
-      },
+      is_recall: true,
     };
 
     if (command === "take_navigation") {
-      toolCall.params.action = "open";
-      if (rawParams.destination) toolCall.params.poi_name = String(rawParams.destination);
-      toolCall.params.navi_type = resolveNavigationMode(rawParams.navi_type, defaultNavigationMode);
+      toolCall.action = "open";
+      if (rawParams.destination) toolCall.poi_name = String(rawParams.destination);
+      toolCall.navi_type = resolveNavigationMode(rawParams.navi_type, defaultNavigationMode);
     } else if (command === "control_calendar") {
-      toolCall.params.action = "create";
-      if (rawParams.title) toolCall.params.title = String(rawParams.title);
-      if (rawParams.start_time) toolCall.params.start_time = String(rawParams.start_time);
-      if (rawParams.end_time) toolCall.params.end_time = String(rawParams.end_time);
+      toolCall.action = "create";
+      if (rawParams.title) toolCall.title = String(rawParams.title);
+      if (rawParams.start_time) toolCall.start_time = String(rawParams.start_time);
+      if (rawParams.end_time) toolCall.end_time = String(rawParams.end_time);
     } else if (command === "send_notification" || command === "send_toast" || command === "speak_tts") {
-      if (rawParams.content) toolCall.params.content = String(rawParams.content);
-      if (typeof rawParams.play_tts === "boolean") toolCall.params.play_tts = rawParams.play_tts;
-      if (rawParams.icon_type) toolCall.params.icon_type = String(rawParams.icon_type);
+      if (rawParams.content) toolCall.content = String(rawParams.content);
+      if (typeof rawParams.play_tts === "boolean") toolCall.play_tts = rawParams.play_tts;
+      if (rawParams.icon_type) toolCall.icon_type = String(rawParams.icon_type);
     } else if (command === "start_video_record") {
-      if (typeof rawParams.duration_sec === "number") toolCall.params.duration_sec = rawParams.duration_sec;
-      if (typeof rawParams.width === "number") toolCall.params.width = rawParams.width;
-      if (typeof rawParams.height === "number") toolCall.params.height = rawParams.height;
-      if (typeof rawParams.quality === "number") toolCall.params.quality = rawParams.quality;
+      if (typeof rawParams.duration_sec === "number") toolCall.duration_sec = rawParams.duration_sec;
+      if (typeof rawParams.width === "number") toolCall.width = rawParams.width;
+      if (typeof rawParams.height === "number") toolCall.height = rawParams.height;
+      if (typeof rawParams.quality === "number") toolCall.quality = rawParams.quality;
     } else if (command === "open_custom_view") {
-      if (rawParams.view_name) toolCall.params.view_name = String(rawParams.view_name);
+      if (rawParams.view_name) toolCall.view_name = String(rawParams.view_name);
       if (rawParams.view_payload) {
-        toolCall.params.view_payload = typeof rawParams.view_payload === "string"
+        toolCall.view_payload = typeof rawParams.view_payload === "string"
           ? rawParams.view_payload
           : JSON.stringify(rawParams.view_payload);
       }
@@ -300,7 +298,7 @@ export function detectIntentFromText(
       return {
         handling_required: true,
         command: pattern.command,
-        params: { is_recall: true },
+        is_recall: true,
       };
     }
   }
@@ -310,12 +308,10 @@ export function detectIntentFromText(
     return {
       handling_required: true,
       command: "take_navigation",
-      params: {
-        is_recall: true,
-        action: "open",
-        poi_name: navigationMatch[1].trim(),
-        navi_type: defaultNavigationMode,
-      },
+      is_recall: true,
+      action: "open",
+      poi_name: navigationMatch[1].trim(),
+      navi_type: defaultNavigationMode,
     };
   }
 
@@ -400,50 +396,48 @@ export function parseToolCallFromAccumulated(
   const toolCall: LingzhuToolCall = {
     handling_required: true,
     command,
-    params: {
-      is_recall: true,
-    },
+    is_recall: true,
   };
 
   switch (command) {
     case "take_navigation":
-      toolCall.params.action = (args.action as string) || "open";
+      toolCall.action = (args.action as string) || "open";
       if (args.destination || args.poi_name || args.address) {
-        toolCall.params.poi_name = String(args.destination || args.poi_name || args.address);
+        toolCall.poi_name = String(args.destination || args.poi_name || args.address);
       }
-      toolCall.params.navi_type = resolveNavigationMode(args.navi_type ?? args.type, defaultNavigationMode);
+      toolCall.navi_type = resolveNavigationMode(args.navi_type ?? args.type, defaultNavigationMode);
       break;
 
     case "control_calendar":
-      toolCall.params.action = (args.action as string) || "create";
-      if (args.title) toolCall.params.title = String(args.title);
+      toolCall.action = (args.action as string) || "create";
+      if (args.title) toolCall.title = String(args.title);
       if (args.start_time || args.startTime) {
-        toolCall.params.start_time = String(args.start_time || args.startTime);
+        toolCall.start_time = String(args.start_time || args.startTime);
       }
       if (args.end_time || args.endTime) {
-        toolCall.params.end_time = String(args.end_time || args.endTime);
+        toolCall.end_time = String(args.end_time || args.endTime);
       }
       break;
 
     case "send_notification":
     case "send_toast":
     case "speak_tts":
-      if (args.content) toolCall.params.content = String(args.content);
-      if (typeof args.play_tts === "boolean") toolCall.params.play_tts = args.play_tts;
-      if (args.icon_type) toolCall.params.icon_type = String(args.icon_type);
+      if (args.content) toolCall.content = String(args.content);
+      if (typeof args.play_tts === "boolean") toolCall.play_tts = args.play_tts;
+      if (args.icon_type) toolCall.icon_type = String(args.icon_type);
       break;
 
     case "start_video_record":
-      if (typeof args.duration_sec === "number") toolCall.params.duration_sec = args.duration_sec;
-      if (typeof args.width === "number") toolCall.params.width = args.width;
-      if (typeof args.height === "number") toolCall.params.height = args.height;
-      if (typeof args.quality === "number") toolCall.params.quality = args.quality;
+      if (typeof args.duration_sec === "number") toolCall.duration_sec = args.duration_sec;
+      if (typeof args.width === "number") toolCall.width = args.width;
+      if (typeof args.height === "number") toolCall.height = args.height;
+      if (typeof args.quality === "number") toolCall.quality = args.quality;
       break;
 
     case "open_custom_view":
-      if (args.view_name) toolCall.params.view_name = String(args.view_name);
+      if (args.view_name) toolCall.view_name = String(args.view_name);
       if (args.view_payload) {
-        toolCall.params.view_payload = typeof args.view_payload === "string"
+        toolCall.view_payload = typeof args.view_payload === "string"
           ? args.view_payload
           : JSON.stringify(args.view_payload);
       }

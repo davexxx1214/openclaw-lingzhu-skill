@@ -42,7 +42,6 @@ const lingzhuPlugin = {
     // 获取并解析配置
     const rawConfig = api.config?.plugins?.entries?.lingzhu?.config;
     pluginConfig = resolveLingzhuConfig(rawConfig);
-
     // 生成或使用已有 AK
     if (pluginConfig.authAk) {
       activeAuthAk = pluginConfig.authAk;

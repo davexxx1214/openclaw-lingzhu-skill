@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 灵珠插件配置类型
  */
 export interface LingzhuConfig {
@@ -82,34 +82,32 @@ export interface LingzhuRequest {
 export interface LingzhuToolCall {
   handling_required: boolean;
   command:
-    | "take_photo"
-    | "take_navigation"
-    | "notify_agent_off"
-    | "control_calendar"
-    | "send_notification"
-    | "send_toast"
-    | "speak_tts"
-    | "start_video_record"
-    | "stop_video_record"
-    | "open_custom_view";
-  params: {
-    is_recall?: boolean;
-    action?: string;
-    poi_name?: string;
-    navi_type?: string;
-    title?: string;
-    start_time?: string;
-    end_time?: string;
-    content?: string;
-    play_tts?: boolean;
-    icon_type?: string;
-    duration_sec?: number;
-    width?: number;
-    height?: number;
-    quality?: number;
-    view_name?: string;
-    view_payload?: string;
-  };
+  | "take_photo"
+  | "take_navigation"
+  | "notify_agent_off"
+  | "control_calendar"
+  | "send_notification"
+  | "send_toast"
+  | "speak_tts"
+  | "start_video_record"
+  | "stop_video_record"
+  | "open_custom_view";
+  is_recall?: boolean;
+  action?: string;
+  poi_name?: string;
+  navi_type?: string;
+  title?: string;
+  start_time?: string;
+  end_time?: string;
+  content?: string;
+  play_tts?: boolean;
+  icon_type?: string;
+  duration_sec?: number;
+  width?: number;
+  height?: number;
+  quality?: number;
+  view_name?: string;
+  view_payload?: string;
 }
 
 /**
