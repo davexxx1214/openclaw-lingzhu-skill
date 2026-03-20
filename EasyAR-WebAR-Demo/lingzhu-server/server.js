@@ -372,8 +372,7 @@ app.post('/metis/agent/api/sse', authMiddleware, async (req, res) => {
             console.log(`[重试] 用户 ${userId} 连续失败 ${retryCount}/${LINGZHU_MAX_RETRIES}`);
 
             if (retryCount < LINGZHU_MAX_RETRIES) {
-                sendAnswer(res, messageId, agentId,
-                    `未识别到匹配的目标，请对准标识物重新拍照。(${LINGZHU_MAX_RETRIES - retryCount}次机会)`);
+                sendAnswer(res, messageId, agentId, '未识别到匹配的目标，请对准标识物重新拍照。');
                 sendToolCall(res, messageId, agentId, { command: 'take_photo' });
             } else {
                 sendAnswer(res, messageId, agentId,
